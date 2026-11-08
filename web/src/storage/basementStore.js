@@ -1,3 +1,4 @@
+import { roomLocalStorage } from "./roomScopedStorage.js";
 import { canonicalDomainPolicies, semanticRouteSnapshot } from "../data/basement.js";
 import { initializePersonal, personalRows, savePersonal } from "./personalStore.js";
 
@@ -42,7 +43,7 @@ function normalizeRoutes(routes) {
 
 export function readSemanticRouteDraft(snapshot = semanticRouteSnapshot) {
   try {
-    const saved = JSON.parse(window.localStorage.getItem(draftStorageKey));
+    const saved = JSON.parse(roomLocalStorage().getItem(draftStorageKey));
     if (!Array.isArray(saved?.routes)) return normalizeRoutes(snapshot.routes);
     if (saved.baseDatasetVersion !== snapshot.datasetVersion) {
       const currentRoutes = normalizeRoutes(snapshot.routes);
@@ -69,7 +70,7 @@ export function readSemanticRouteDraft(snapshot = semanticRouteSnapshot) {
 }
 
 export function saveSemanticRouteDraft(routes, baseDatasetVersion = semanticRouteSnapshot.datasetVersion) {
-  window.localStorage.setItem(draftStorageKey, JSON.stringify({
+  roomLocalStorage().setItem(draftStorageKey, JSON.stringify({
     schemaVersion: 2,
     baseDatasetVersion,
     updatedAt: new Date().toISOString(),
@@ -78,7 +79,7 @@ export function saveSemanticRouteDraft(routes, baseDatasetVersion = semanticRout
 }
 
 export function clearSemanticRouteDraft(snapshot = semanticRouteSnapshot) {
-  window.localStorage.removeItem(draftStorageKey);
+  roomLocalStorage().removeItem(draftStorageKey);
   return normalizeRoutes(snapshot.routes);
 }
 
@@ -159,7 +160,7 @@ export function appendSemanticRouteDraftExample({
 
 export function readRecallObservationReviews() {
   try {
-    const saved = JSON.parse(window.localStorage.getItem(recallObservationStorageKey));
+    const saved = JSON.parse(roomLocalStorage().getItem(recallObservationStorageKey));
     return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
   } catch {
     return {};
@@ -174,11 +175,11 @@ export async function saveRecallObservationReviews(reviews) {
       if (JSON.stringify(previous[key]) !== JSON.stringify(value)) await savePersonal("recall_review", key, value);
     }
     const saved = Object.fromEntries(personalRows("recall_review").map(row => [row.key, row.value]));
-    window.localStorage.setItem(recallObservationStorageKey, JSON.stringify(saved));
-    window.localStorage.removeItem("serein.personal.unsaved-reviews.v1");
+    roomLocalStorage().setItem(recallObservationStorageKey, JSON.stringify(saved));
+    roomLocalStorage().removeItem("serein.personal.unsaved-reviews.v1");
     return saved;
   } catch (error) {
-    window.localStorage.setItem("serein.personal.unsaved-reviews.v1", JSON.stringify(reviews));
+    roomLocalStorage().setItem("serein.personal.unsaved-reviews.v1", JSON.stringify(reviews));
     throw error;
   }
 }
@@ -188,28 +189,28 @@ function domainDraftKey(kind) {
 }
 
 function migrateDomainDraft() {
-  const old = window.localStorage.getItem(domainPolicyStorageKey);
+  const old = roomLocalStorage().getItem(domainPolicyStorageKey);
   if (old == null) return;
   for (const kind of ["event", "scene"]) {
-    if (window.localStorage.getItem(domainDraftKey(kind)) == null) window.localStorage.setItem(domainDraftKey(kind), old);
+    if (roomLocalStorage().getItem(domainDraftKey(kind)) == null) roomLocalStorage().setItem(domainDraftKey(kind), old);
   }
-  window.localStorage.removeItem(domainPolicyStorageKey);
+  roomLocalStorage().removeItem(domainPolicyStorageKey);
 }
 
 export function hasDomainPolicyDraft(kind) {
   if (kind) migrateDomainDraft();
-  return window.localStorage.getItem(domainDraftKey(kind)) != null;
+  return roomLocalStorage().getItem(domainDraftKey(kind)) != null;
 }
 
 export function domainPolicyDraftVersion(kind) {
-  try { return JSON.parse(window.localStorage.getItem(domainDraftKey(kind)))?.version ?? null; }
+  try { return JSON.parse(roomLocalStorage().getItem(domainDraftKey(kind)))?.version ?? null; }
   catch { return null; }
 }
 
 export function readDomainPolicyDraft(baseline = canonicalDomainPolicies, kind) {
   if (kind) migrateDomainDraft();
   try {
-    const stored = JSON.parse(window.localStorage.getItem(domainDraftKey(kind)));
+    const stored = JSON.parse(roomLocalStorage().getItem(domainDraftKey(kind)));
     const saved = Array.isArray(stored) ? stored : stored?.domains;
     if (!Array.isArray(saved)) return cloneRoutes(baseline);
     const savedByKey = new Map(saved.map((item) => [item?.key, item?.policy]));
@@ -226,10 +227,10 @@ export function readDomainPolicyDraft(baseline = canonicalDomainPolicies, kind) 
 
 export function saveDomainPolicyDraft(domains, kind, version = null) {
   const policies = domains.map(({ key, policy }) => ({ key, policy }));
-  window.localStorage.setItem(domainDraftKey(kind), JSON.stringify(kind ? { domains: policies, version } : policies));
+  roomLocalStorage().setItem(domainDraftKey(kind), JSON.stringify(kind ? { domains: policies, version } : policies));
 }
 
 export function clearDomainPolicyDraft(baseline = canonicalDomainPolicies, kind) {
-  window.localStorage.removeItem(domainDraftKey(kind));
+  roomLocalStorage().removeItem(domainDraftKey(kind));
   return cloneRoutes(baseline);
 }
