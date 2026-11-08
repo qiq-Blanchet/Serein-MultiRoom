@@ -4,10 +4,18 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { preview } from 'vite';
 import { requireWebAuth } from './webAuth.mjs';
+import { adminBasicMatches, effectiveRoom, readyRooms, signedPreviewRoom } from './roomSession.mjs';
+import { dashboardRoomEndpoint } from './roomDashboardRoutes.mjs';
 
+// Legacy deployments continue to use their original single-room settings.
+const multiRoom = Boolean(process.env.SEREIN_MULTIROOM_ROUTES_FILE);
 const filename = process.env.SEREIN_WEB_AUTH_FILE;
-if (!filename) throw new Error('SEREIN_WEB_AUTH_FILE is required');
-const core = new URL(process.env.SEREIN_MEMORY_URL);
+if (!multiRoom && !filename) throw new Error('SEREIN_WEB_AUTH_FILE is required');
+const adminKey = multiRoom ? readFileSync(process.env.SEREIN_MULTIROOM_ADMIN_KEY_FILE, 'utf8').trim() : null;
+if (multiRoom && (!adminKey || adminKey.length < 48)) throw new Error('Multi-room admin key must be initialized');
+const core = new URL(multiRoom
+  ? (process.env.SEREIN_MULTIROOM_CHAT_URL || 'http://127.0.0.1:18219')
+  : process.env.SEREIN_MEMORY_URL);
 let publicOrigin = null;
 if (process.env.SEREIN_PUBLIC_ORIGIN) {
   publicOrigin = new URL(process.env.SEREIN_PUBLIC_ORIGIN);
@@ -16,8 +24,14 @@ if (process.env.SEREIN_PUBLIC_ORIGIN) {
       || publicOrigin.username || publicOrigin.password || publicOrigin.pathname !== '/'
       || publicOrigin.search || publicOrigin.hash) throw new Error('SEREIN_PUBLIC_ORIGIN must be an HTTPS origin or loopback HTTP origin');
 }
-process.env.SEREIN_MEMORY_TOKEN = readFileSync(process.env.SEREIN_MEMORY_TOKEN_FILE, 'utf8').trim();
-if (!process.env.SEREIN_MEMORY_TOKEN) throw new Error('Memory token is empty');
+if (!multiRoom) {
+  process.env.SEREIN_MEMORY_TOKEN = readFileSync(process.env.SEREIN_MEMORY_TOKEN_FILE, 'utf8').trim();
+  if (!process.env.SEREIN_MEMORY_TOKEN) throw new Error('Memory token is empty');
+}
+if (multiRoom && !publicOrigin && !['127.0.0.1','localhost','::1'].includes(
+    process.env.SEREIN_GATEWAY_BIND || '0.0.0.0')) {
+  throw new Error('Multi-room administrator UI requires configured HTTPS public origin or loopback binding');
+}
 const web = await preview({ root: fileURLToPath(new URL('../', import.meta.url)),
   preview: { host: '127.0.0.1', port: Number(process.env.SEREIN_PREVIEW_PORT || 4173), strictPort: true, allowedHosts: true } });
 const bearerPaths = new Set(['/v1/models', '/v1/chat/completions',
@@ -32,8 +46,15 @@ const server = http.createServer((req, res) => {
     res.end('Invalid request URL'); return;
   }
   if (path === '/ready' && req.method === 'GET') {
+    const chosen = multiRoom ? readyRooms(process.env.SEREIN_MULTIROOM_ROUTES_FILE)[0] : null;
+    if (multiRoom && !chosen) { res.writeHead(503); res.end(); return; }
+    const previewHeaders = multiRoom ? {
+      'X-Serein-Verified-Room':chosen.room_id,
+      'X-Serein-Verified-Proof':signedPreviewRoom(chosen.room_id, adminKey),
+    } : {};
     Promise.all([fetch(new URL('/health', core), {signal:AbortSignal.timeout(3000)}),
-      fetch(`http://127.0.0.1:${web.httpServer.address().port}/`, {signal:AbortSignal.timeout(3000)})])
+      fetch(`http://127.0.0.1:${web.httpServer.address().port}/`,
+        {headers:previewHeaders, signal:AbortSignal.timeout(3000)})])
       .then(results => { res.writeHead(results.every(r => r.ok) ? 200 : 503); res.end(); })
       .catch(() => { res.writeHead(503); res.end(); });
     return;
@@ -49,12 +70,21 @@ const server = http.createServer((req, res) => {
     res.end('{"detail":"OAuth requires a configured HTTPS public origin"}');return;
   }
   const chat = bearerPaths.has(path) || mcp;
+  if (multiRoom && oauth) {
+    res.writeHead(404, {'Cache-Control':'no-store'}); res.end('OAuth is not yet available for rooms'); return;
+  }
   if (mcp && req.headers.origin) {
     let originOK = false;
     try { originOK = new URL(req.headers.origin).host === req.headers.host; } catch {}
     if (!originOK) { res.writeHead(403); res.end('Invalid origin'); return; }
   }
-  if (!chat && !oauth && !requireWebAuth(req, res, filename)) return;
+  if (multiRoom && !chat) {
+    if (!adminBasicMatches(req.headers.authorization, adminKey)) {
+      res.writeHead(401, {'WWW-Authenticate':'Basic realm="Serein Rooms", charset="UTF-8"',
+                          'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
+      res.end('Administrator authentication required'); return;
+    }
+  } else if (!chat && !oauth && !requireWebAuth(req, res, filename)) return;
   if (!chat && !oauth && !['GET','HEAD','OPTIONS'].includes(req.method)) {
     let originOK = true;
     try { if (req.headers.origin) originOK = new URL(req.headers.origin).host === req.headers.host; }
@@ -66,9 +96,30 @@ const server = http.createServer((req, res) => {
   if (chat && !mcp && !req.headers.authorization?.startsWith('Bearer ')) {
     res.writeHead(401); res.end('Bearer token required'); return;
   }
+  if (multiRoom && path.startsWith('/__serein/rooms')
+      && ['/__serein/rooms','/__serein/rooms/select','/__serein/rooms/current'].includes(path)) {
+    void dashboardRoomEndpoint(req, res, {
+      path, publicOrigin, adminKey,
+      routesFile:process.env.SEREIN_MULTIROOM_ROUTES_FILE,
+      adminURL:process.env.SEREIN_MULTIROOM_ADMIN_URL || 'http://127.0.0.1:18220',
+    }).catch(() => { if (!res.headersSent) res.writeHead(502); res.end('Room manager unavailable'); });
+    return;
+  }
   const backend = chat || oauth;
   const target = backend ? core : new URL(`http://127.0.0.1:${process.env.SEREIN_PREVIEW_PORT || 4173}`);
   const headers = { ...req.headers, host: backend ? target.host : req.headers.host };
+  if (multiRoom && !backend) {
+    const current = effectiveRoom(req.headers.cookie, adminKey,
+      readyRooms(process.env.SEREIN_MULTIROOM_ROUTES_FILE));
+    if (!current) { res.writeHead(503); res.end('No ready room'); return; }
+    // Browser cannot supply or override the internal room context.
+    for (const name of Object.keys(headers)) {
+      if (name.startsWith('x-serein-verified-') || name.startsWith('x-forwarded-'))
+        delete headers[name];
+    }
+    headers['x-serein-verified-room'] = current.room_id;
+    headers['x-serein-verified-proof'] = signedPreviewRoom(current.room_id, adminKey);
+  }
   if (mcp || oauth) {
     headers['x-forwarded-host'] = publicOrigin?.host || req.headers.host;
     headers['x-forwarded-proto'] = publicOrigin?.protocol.slice(0,-1) || 'http';
