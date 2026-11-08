@@ -632,5 +632,6 @@
   "docs/ROOMS_M2.md",
   "src/serein/room_admin.py",
   "src/serein/rooms_ui.html",
-  "src/serein/rooms_ui.js"
+  "src/serein/rooms_ui.js",
+  "docs/ROOMS_M3_PHASE1.md"
 ]
