@@ -8,6 +8,7 @@ import {
   effectiveRoom, signedPreviewRoom, verifyPreviewRoom,
 } from '../server/roomSession.mjs';
 import { roomContextPlugin, backendFor } from '../server/roomContext.mjs';
+import { callSereinBackend } from '../server/sereinBackend.mjs';
 import { initializeRoomScope, roomLocalStorage, roomSessionStorage }
   from '../src/storage/roomScopedStorage.js';
 
@@ -79,6 +80,22 @@ test('Vite backend contexts use verified per-room internal token; never user roo
       assert.equal(result.roomId,id);
       assert.match(result.base,new RegExp(id));
       assert.equal(result.token.includes('internal-'+(id===A?'a':'b')),true);
+      // Exercise the real Vite backend adapter, not only the context getter.
+      const upstream=await new Promise((resolve,reject)=>{
+        const req={headers:{
+          'x-serein-verified-room':id,
+          'x-serein-verified-proof':signedPreviewRoom(id,KEY),
+        }};
+        const res={writeHead(code){reject(Error('Unexpected rejection: '+code));},end(){}};
+        middleware(req,res,()=>callSereinBackend('/v1/settings',{},{
+          env, fetchImpl:async (url,options)=>{
+            assert.equal(new URL(url).hostname,'room-'+id);
+            assert.equal(options.headers.Authorization,'Bearer '+result.token);
+            return {ok:true,status:200,json:async()=>({identity:'room-'+id})};
+          },
+        }).then(resolve,reject));
+      });
+      assert.equal(upstream.payload.identity,'room-'+id);
     }
     assert.equal(verifyPreviewRoom(A,signedPreviewRoom(B,KEY),KEY),false);
     const denied=await new Promise((resolve)=>{
