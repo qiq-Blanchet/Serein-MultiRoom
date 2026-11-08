@@ -1,3 +1,4 @@
+import { roomSessionStorage } from "../storage/roomScopedStorage.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
@@ -80,7 +81,7 @@ export function NarrativePage() {
         .finally(() => { if (!cancelled && !controller.signal.aborted) setLoading(false); });
     };
     const openFromInbox = () => {
-      if (window.location.hash === "#narrative" && window.sessionStorage.getItem("serein:narrative-open-intent")) refreshRolls();
+      if (window.location.hash === "#narrative" && roomSessionStorage().getItem("serein:narrative-open-intent")) refreshRolls();
     };
     refreshRolls();
     window.addEventListener("hashchange", openFromInbox);
@@ -261,12 +262,12 @@ export function NarrativePage() {
 
   useEffect(() => {
     if (window.location.hash !== "#narrative") return;
-    const raw = window.sessionStorage.getItem("serein:narrative-open-intent");
+    const raw = roomSessionStorage().getItem("serein:narrative-open-intent");
     if (!raw) return;
     const intent = JSON.parse(raw);
     const roll = narrativeRolls.find(item => item.id === intent.narrativeId);
     if (!roll) return;
-    window.sessionStorage.removeItem("serein:narrative-open-intent");
+    roomSessionStorage().removeItem("serein:narrative-open-intent");
     setSelectedRollId(roll.id);
     if (intent.action === "write") writeNewRoll(roll);
   }, [narrativeRolls]);
@@ -274,10 +275,10 @@ export function NarrativePage() {
   useEffect(() => {
     const openRewriteIntent = () => {
       if (window.location.hash !== "#narrative") return;
-      const narrativeId = window.sessionStorage.getItem("serein:narrative-rewrite-intent") || "";
+      const narrativeId = roomSessionStorage().getItem("serein:narrative-rewrite-intent") || "";
       const targetRoll = narrativeRolls.find((roll) => roll.id === narrativeId);
       if (!targetRoll) return;
-      window.sessionStorage.removeItem("serein:narrative-rewrite-intent");
+      roomSessionStorage().removeItem("serein:narrative-rewrite-intent");
       setSelectedRollId(targetRoll.id);
       generatePreview("rewrite", targetRoll);
     };
