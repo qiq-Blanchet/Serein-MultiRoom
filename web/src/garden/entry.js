@@ -1,3 +1,4 @@
+import { initializeRoomScope } from '../storage/roomScopedStorage.js';
 import { readGardenSnapshot } from './data.js';
 import { memoryLayout, projectMemories } from './memories.js';
 import './style.css';
@@ -48,4 +49,11 @@ const back = document.querySelector('#garden-back');
 back.hidden = embedded;
 back.addEventListener('click', () => { location.href = './#memory'; });
 retry.addEventListener('click', openGarden);
-openGarden();
+try {
+  await initializeRoomScope();
+  openGarden();
+} catch {
+  message.textContent = '无法验证当前 AI 房间。请重新打开已授权的记忆库。';
+  retry.hidden = true;
+  reveal();
+}
