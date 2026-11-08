@@ -25,6 +25,14 @@ def test_room_creation_isolates_paths_keys_and_private_data(tmp_path):
     with sqlite3.connect(db) as conn:
         conn.execute("CREATE TABLE private_canary(secret TEXT)")
         conn.execute("INSERT INTO private_canary VALUES ('PRIVATE_MEMORY')")
+        # Synthetic private state for every class the user explicitly barred
+        # from crossing room boundaries.
+        for category in ("scene", "event", "diary", "dream", "mood", "memo"):
+            conn.execute(
+                "INSERT INTO background_state(name,value_json) VALUES (?,?)",
+                ("private-canary:" + category,
+                 json.dumps({"content": "PRIVATE_" + category.upper()})),
+            )
         conn.commit()
     save_settings(db, {
         "upstreams": [{"name": "test", "base_url": "https://example.invalid/v1",
@@ -57,6 +65,11 @@ def test_room_creation_isolates_paths_keys_and_private_data(tmp_path):
         assert not conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='private_canary'"
         ).fetchone()
+        # No Scene/Event/diary/dream/mood/memo state is cloned, even if
+        # source-room auto-summary and dream/memo feature switches are enabled.
+        assert conn.execute(
+            "SELECT COUNT(*) FROM background_state WHERE name LIKE 'private-canary:%'"
+        ).fetchone()[0] == 0
     assert first["gateway_key"] != second["gateway_key"]
     assert not manager.resolve_gateway_key(first["gateway_key"])
     assert not manager.resolve_gateway_key(second["gateway_key"])
