@@ -78,8 +78,16 @@ def create_app(routes_file: Path, *, transport=None) -> FastAPI:
 
     @app.get("/health")
     def health():
-        # No room names, IDs or registry metadata exposed.
-        return {"status": "ok" if routes_file.is_file() else "unavailable"}
+        # No room names, IDs or registry metadata exposed. Fail the Docker
+        # health check when the routing manifest is missing or unreadable.
+        try:
+            document = json.loads(routes_file.read_text(encoding="utf-8"))
+            available = document.get("version") == 1 and isinstance(document.get("rooms"), list)
+        except (OSError, ValueError, TypeError):
+            available = False
+        if not available:
+            return _json_error(503, "Gateway routes unavailable")
+        return {"status": "ok"}
 
     @app.api_route("/{route_path:path}", methods=list(ALLOWED_METHODS))
     async def proxy(route_path: str, request: Request):
