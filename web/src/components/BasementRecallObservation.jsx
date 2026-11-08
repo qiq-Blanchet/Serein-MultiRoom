@@ -1,3 +1,4 @@
+import { roomLocalStorage } from "../storage/roomScopedStorage.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowClockwise,
@@ -244,7 +245,7 @@ export function BasementRecallObservation() {
         await initializePersonal();
         const rows = await loadPersonalScope('recall_review');
         if (cancelled) return;
-        window.localStorage.setItem('serein.basement.recall-observation-review.v1', JSON.stringify(Object.fromEntries(rows.map(row => [row.key, row.value]))));
+        roomLocalStorage().setItem('serein.basement.recall-observation-review.v1', JSON.stringify(Object.fromEntries(rows.map(row => [row.key, row.value]))));
         setManualSimulations(readRecallSimulationTrainingLabels());
       } catch (error) { if (!cancelled) setExportNotice(error.message); }
       if (!cancelled) { setReviews(readRecallObservationReviews()); setReviewsReady(true); }
