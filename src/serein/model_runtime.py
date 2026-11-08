@@ -217,7 +217,6 @@ def normalize_response(model, result):
 
 
 async def complete(model, payload, *, window_id=''):
-    url, headers, body = request_for(model, {**payload, 'stream':False}, window_id=window_id)
     timeout=httpx.Timeout(model.get('request_timeout_seconds',120),connect=15,pool=15)
     started=monotonic()
     try:
@@ -310,6 +309,8 @@ class TaskClient:
             for key in ('thinking','reasoning','enable_thinking'):
                 payload.pop(key,None)
             payload.update(non_thinking_options(model))
+            if model.get('protocol') == 'anthropic':
+                payload['_serein_skip_auto_thinking'] = True
         import asyncio
         timeout = payload.pop('timeout', 120)
         result=await asyncio.wait_for(complete(model,payload), timeout=timeout)
