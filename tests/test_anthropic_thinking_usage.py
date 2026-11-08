@@ -287,3 +287,34 @@ def test_explicit_client_limits_and_thinking_override_gateway_defaults():
     assert body['output_config']['effort'] == 'medium'
     assert [request_for(model(), attempt)[2]['max_tokens']
             for attempt in relax_plan(model(), user_turn(max_tokens=120000))] == [120000]
+
+
+def test_custom_anthropic_options_survive_actual_chat_gateway(deployment, monkeypatch):
+    """Client JSON must reach Anthropic /messages with custom effort and output cap."""
+    original = httpx.AsyncClient
+    seen = []
+
+    def handle(request):
+        assert request.url.path.endswith('/messages')
+        body = json.loads(request.content)
+        seen.append(body)
+        return httpx.Response(200, json=native_reply())
+
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(
+        transport=httpx.MockTransport(handle), **kwargs))
+    response = deployment.post('/v1/chat/completions', json={
+        'model': 'provider/claude-sonnet',
+        'stream': False,
+        'messages': [{'role': 'user', 'content': 'hello'}],
+        'serein': {'memory': False},
+        'max_tokens': 120000,
+        'output_config': {'effort': 'high'},
+        'top_k': 15,
+    })
+    assert response.status_code == 200, response.text
+    assert len(seen) == 1
+    assert seen[0]['max_tokens'] == 120000
+    assert seen[0]['output_config'] == {'effort': 'high'}
+    assert seen[0]['thinking'] == {'type': 'adaptive', 'display': 'summarized'}
+    assert seen[0]['top_k'] == 15
+    assert response.json()['usage']['prompt_tokens'] == 60
