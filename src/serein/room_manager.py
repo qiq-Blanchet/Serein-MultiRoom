@@ -67,32 +67,78 @@ def _room_toml(mcp_tools: list[str]) -> str:
 
 
 def _safe_clone_settings(source_db: Path, target_db: Path, *, reuse_provider_keys: bool) -> None:
-    """White-listed configuration copy; never copy memory tables or identities."""
+    """Field-level configuration allowlist; never clone private memory or identity."""
     from copy import deepcopy
-    from .deployment import read_settings, save_settings
+    from .deployment import (
+        DEFAULT_FEATURES, DEFAULT_RESUME, DEFAULT_UPSTREAM, TASKS,
+        read_settings, save_settings,
+    )
 
-    settings = read_settings(source_db)
-    allowed = ("upstream", "upstreams", "models", "assignments", "features",
-               "clock", "pipeline")
-    changes = {key: deepcopy(settings[key]) for key in allowed}
-    # The resume selected_ids are references to private source-room memories.
-    changes["resume"] = {
-        key: deepcopy(value) for key, value in settings["resume"].items()
-        if key not in {"selected_ids"}
+    source = read_settings(source_db)
+
+    def fields(data, keys):
+        return {key: deepcopy(value) for key, value in data.items() if key in keys}
+
+    credentials = {"api_key", "api_key_env"}
+    connection_fields = {
+        "id", "name", "base_url", "api_key", "api_key_env", "protocol",
+        "prompt_cache", "prompt_cache_retention", "prompt_cache_ttl",
+        "anthropic_version", "anthropic_beta", "default_model",
+        "request_timeout_seconds",
     }
-    # Only known scalar recall configuration is safe to reuse. No index paths.
-    changes["recall"] = {
-        key: deepcopy(value) for key, value in settings["recall"].items()
-        if key not in {"routing_file", "germany_policy_file"}
-        and isinstance(value, (str, int, float, bool))
+    model_fields = {
+        "id", "upstream_model", "model", "label", "base_url", "api_key",
+        "api_key_env", "protocol", "prompt_cache", "prompt_cache_retention",
+        "prompt_cache_ttl", "anthropic_version", "anthropic_beta",
+        "request_timeout_seconds", "dimension", "query_instruction",
+        "document_instruction", "tokenizer", "reasoning_content_compat",
     }
-    # The room's ai_name, user_name, dream prompts and tagging personal material
-    # intentionally stay at fresh-database defaults.
+
+    def clean_credentials(values):
+        if not reuse_provider_keys:
+            for name in credentials:
+                values.pop(name, None)
+        return values
+
+    groups = []
+    for group in source["upstreams"]:
+        copy = clean_credentials(fields(group, connection_fields))
+        copy["models"] = [
+            clean_credentials(fields(entry, model_fields)) if isinstance(entry, dict) else entry
+            for entry in group.get("models", [])
+        ]
+        groups.append(copy)
+    models = [clean_credentials(fields(model, model_fields)) for model in source["models"]]
+
+    pipeline_fields = {
+        "auto_enabled", "execution_mode", "max_input_chars", "max_prompt_chars",
+        "timeout_seconds", "event_writer_concurrency", "track_lookback_days",
+        "track_candidates_enabled", "track_direct_hours", "track_candidate_limit",
+        "router_compact_cards", "joint_review_enabled", "material_review_enabled",
+        "round_gate_enabled", "append_protected_enabled",
+        "event_history_enabled", "curator_summary_first",
+    }
+    recall_fields = {
+        "direct_threshold", "body_candidate_threshold", "cue_candidate_threshold",
+        "direct_pool_limit", "max_cards", "candidate_limit",
+        "passages_enabled", "passage_min_chars", "embedding_batch_size",
+        "embedding_concurrency", "index_catch_up",
+    }
+    changes = {
+        "upstream": fields(source["upstream"], DEFAULT_UPSTREAM),
+        "upstreams": groups,
+        "models": models,
+        "assignments": fields(source["assignments"], TASKS),
+        "features": fields(source["features"], DEFAULT_FEATURES),
+        "clock": fields(source["clock"], {"timezone"}),
+        "pipeline": fields(source["pipeline"], pipeline_fields),
+        "recall": fields(source["recall"], recall_fields),
+        "resume": fields(source["resume"], set(DEFAULT_RESUME) - {"selected_ids"}),
+    }
     if not reuse_provider_keys:
         changes["upstream"]["api_key"] = ""
-        for item in changes["upstreams"] + changes["models"]:
-            item.pop("api_key", None)
-            item.pop("api_key_env", None)
+    # Intentionally omit identity, dream prompts, tagging catalog, resume
+    # selected_ids, any unknown settings and all original evidence/diary tables.
     save_settings(target_db, changes)
 
 
