@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Serein Multi-Room · 管理控制台</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+      background: #f5f6f7; color: #1c2931; line-height: 1.55; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    [hidden] { display: none !important; }
+    header { background: #142c35; color: #fff; padding: 26px clamp(20px,5vw,70px); display: flex;
+      justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+    header h1 { margin: 0; font-size: 23px; letter-spacing: -.02em; }
+    header p { margin: 2px 0 0; color: #a8c3cb; font-size: 13px; }
+    .tag { border: 1px solid #587681; border-radius: 30px; padding: 5px 12px; font-size: 12px; }
+    main { max-width: 1100px; margin: 28px auto; padding: 0 22px 65px; }
+    .panel { padding: 24px; background: white; border: 1px solid #e2e7e9;
+      box-shadow: 0 5px 25px rgba(13,40,54,.03); border-radius: 15px; }
+    h2 { font-size: 19px; margin: 0 0 8px; }
+    p { margin: 5px 0 14px; }
+    .muted { color: #5c6c76; font-size: 13px; }
+    label { font-size: 13px; display: block; font-weight: 650; margin: 14px 0 6px; }
+    input:not([type=checkbox]), select { width: 100%; min-width: 0; border: 1px solid #bac8ce;
+      border-radius: 9px; background: #fff; padding: 11px; color: #17313e; font: inherit; }
+    input:focus-visible, select:focus-visible, button:focus-visible { outline: 3px solid #98cfc5; outline-offset: 2px; }
+    button { cursor: pointer; font: inherit; font-weight: 650; border: 1px solid #c5d2d4;
+      background: #fff; color: #234451; padding: 10px 15px; border-radius: 9px; }
+    button.primary { background: #176b65; color: #fff; border-color: #176b65; }
+    button:hover:not(:disabled) { filter: brightness(.95); }
+    button:disabled { opacity: .55; cursor: wait; }
+    button.quiet { border: 0; background: transparent; }
+    .buttons { display:flex; gap:8px; flex-wrap:wrap; margin-top:18px; }
+    .narrow { max-width: 510px; margin: 48px auto; }
+    .layout { display: grid; grid-template-columns: minmax(275px,340px) 1fr; align-items:start; gap:20px; }
+    .layout > * { min-width: 0; }
+    .toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:16px; }
+    .toolbar h2 { margin:0; }
+    .room-grid { display:grid; gap:13px; }
+    .room { border:1px solid #e1e9eb; border-radius:12px; padding:16px; background:#fff; }
+    .room-top { display:flex; align-items:start; justify-content:space-between; gap:8px; }
+    .room h3 { margin:0; font-size:17px; overflow-wrap:anywhere; }
+    .room code { overflow-wrap:anywhere; font-size:11px; }
+    .pill { background: #eef3f3; color:#32565b; border-radius:30px; padding:4px 10px; font-size:12px; white-space:nowrap; }
+    .pill.ready { background:#e1f4eb; color:#166149; }
+    .pill.error { background:#fbeaea; color:#8b3636; }
+    .choice { display:flex; align-items:center; gap:9px; margin:16px 0; font-size:13px; }
+    .choice input { width:18px; height:18px; accent-color: #176b65; }
+    .choice label { margin:0; font-weight:400; }
+    .notice { border-left:3px solid #93bab6; padding:10px 12px; background:#f2f8f7; color:#3c6063;
+      border-radius: 0 8px 8px 0; font-size:13px; }
+    .message { min-height:20px; color:#86532b; font-size:13px; margin-top:12px; overflow-wrap:anywhere; }
+    .secret { padding:16px; background:#fff9eb; border:1px solid #eadab3; border-radius:10px; margin:0 0 16px; }
+    .secret code { display:block; border:1px dashed #d9c89f; border-radius:6px; background:#fff;
+      overflow-wrap:anywhere; padding:12px; user-select:all; font-size:12px; }
+    .separator { margin:18px 0; border:0; border-top:1px solid #e8ecee; }
+    @media(max-width:760px) { .layout { grid-template-columns:1fr; } .panel { padding:19px; } }
+  </style>
+  <script src="/rooms-ui.js" defer></script>
+</head>
+<body>
+<header>
+  <div><h1>Serein · Multi-Room</h1><p>独立记忆房间 · 统一管理入口</p></div>
+  <span class="tag">M3 · 开发预览版</span>
+</header>
+<main>
+  <section id="login-panel" class="panel narrow">
+    <h2>管理员验证</h2>
+    <p class="muted">输入控制层管理员密钥。它与各房间用于 Operit 的 Gateway Key 完全不同。</p>
+    <form id="login-form">
+      <label for="admin-key">管理员密钥</label>
+      <input id="admin-key" type="password" autocomplete="off" required minlength="48" placeholder="从 VPS 管理密钥文件读取">
+      <div class="buttons"><button class="primary" type="submit">进入管理控制台</button></div>
+    </form>
+    <p id="login-message" class="message" role="status" aria-live="polite"></p>
+    <p class="muted">密钥只保留在当前页面内存中，不写入浏览器本地存储。请通过本机访问或安全 HTTPS 隧道使用。</p>
+  </section>
+  <section id="workspace" hidden>
+    <div class="toolbar">
+      <h2>房间管理</h2>
+      <div class="buttons" style="margin:0">
+        <button id="refresh-button" type="button">刷新状态</button>
+        <button id="logout-button" type="button" class="quiet">退出管理</button>
+      </div>
+    </div>
+    <div id="secret-panel" class="secret" hidden>
+      <strong>新房间 Gateway Key（请安全保存）</strong>
+      <p class="muted">这把 Key 仅能访问刚创建的房间，不是管理员密钥。关闭此提示后，本页不再显示。</p>
+      <code id="new-room-key"></code>
+      <div class="buttons">
+        <button id="copy-key-button" type="button">复制 Key</button>
+        <button id="dismiss-key-button" type="button">我已保存，关闭</button>
+      </div>
+    </div>
+    <div class="layout">
+      <section class="panel">
+        <h2>添加 AI 房间</h2>
+        <p class="muted">每间房有独立数据库、索引和内部密钥。无需复制 Serein 源码。</p>
+        <form id="create-form">
+          <label for="room-name">房间名称</label>
+          <input id="room-name" type="text" maxlength="80" required placeholder="例如：新伙伴">
+          <label for="room-source">配置来源</label>
+          <select id="room-source">
+            <option value="first">复制第一个房间的功能配置（默认）</option>
+            <option value="blank">全新空白房间</option>
+          </select>
+          <div class="choice">
+            <input id="reuse-provider" type="checkbox">
+            <label for="reuse-provider">同时复用模型供应商密钥</label>
+          </div>
+          <div class="notice">只复制模型、任务模型、功能开关和自动摘要设置等配置。Scene、Event、日记、梦境、心绪、备忘及个人化内容不会复制。</div>
+          <div class="buttons"><button type="submit" class="primary" id="create-button">创建独立房间</button></div>
+        </form>
+        <p id="create-message" class="message" role="status" aria-live="polite"></p>
+        <hr class="separator">
+        <p class="muted">目前支持创建、列出、启动、停止。原版完整设置页整合、MCP 权限编辑与备份操作仍在后续阶段。</p>
+      </section>
+      <section class="panel">
+        <div class="toolbar"><h2>已有房间</h2><span class="muted" id="room-count"></span></div>
+        <div class="room-grid" id="room-list" aria-live="polite">
+          <p class="muted">请先以管理员身份登录。</p>
+        </div>
+        <p id="rooms-message" class="message" role="status" aria-live="polite"></p>
+      </section>
+    </div>
+  </section>
+</main>
+</body>
+</html>
