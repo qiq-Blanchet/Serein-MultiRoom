@@ -1,3 +1,4 @@
+import { roomLocalStorage, roomSessionStorage } from "./roomScopedStorage.js";
 import { initializePersonal, savePersonal } from "./personalStore.js";
 export const recallSimulationTrainingStorageKey = "serein.basement.recall-simulation-training.v1";
 
@@ -693,10 +694,10 @@ function randomId(prefix) {
 
 function activeBatchId() {
   try {
-    const saved = window.sessionStorage.getItem(batchStorageKey);
+    const saved = roomSessionStorage().getItem(batchStorageKey);
     if (saved) return saved;
     const created = randomId("batch");
-    window.sessionStorage.setItem(batchStorageKey, created);
+    roomSessionStorage().setItem(batchStorageKey, created);
     return created;
   } catch {
     return `date-${new Date().toISOString().slice(0, 10)}`;
@@ -771,7 +772,7 @@ export function createRecallSimulationTrainingLabel(input, options = {}) {
 
 export function readRecallSimulationTrainingLabels() {
   try {
-    const saved = JSON.parse(window.localStorage.getItem(recallSimulationTrainingStorageKey));
+    const saved = JSON.parse(roomLocalStorage().getItem(recallSimulationTrainingStorageKey));
     return Array.isArray(saved?.labels) ? saved.labels.filter((item) => item?.query && item?.expectedAction) : [];
   } catch {
     return [];
@@ -806,11 +807,11 @@ export async function upsertRecallSimulationTrainingLabel(input) {
   }
   try { await savePersonal("recall_simulation", next.id, next); }
   catch (error) {
-    window.localStorage.setItem("serein.personal.unsaved-simulation.v1", JSON.stringify(next));
+    roomLocalStorage().setItem("serein.personal.unsaved-simulation.v1", JSON.stringify(next));
     throw error;
   }
-  window.localStorage.removeItem("serein.personal.unsaved-simulation.v1");
-  window.localStorage.setItem(recallSimulationTrainingStorageKey, JSON.stringify({
+  roomLocalStorage().removeItem("serein.personal.unsaved-simulation.v1");
+  roomLocalStorage().setItem(recallSimulationTrainingStorageKey, JSON.stringify({
     schemaVersion: 3,
     updatedAt: next.updatedAt,
     labels,
