@@ -25,7 +25,7 @@ serein = "serein.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"serein" = ["resources/*.json", "resources/*.md", "resources/agents/*/AGENTS.md"]
+"serein" = ["resources/*.json", "resources/*.md", "resources/agents/*/AGENTS.md", "rooms_ui.html", "rooms_ui.js"]
 "serein.core" = ["*.sql"]
 "serein.recall.germany" = ["resources/*.json", "resources/stopwords/*.txt", "PROVENANCE.md"]
 "serein.compat.germany" = ["PROVENANCE.md"]
