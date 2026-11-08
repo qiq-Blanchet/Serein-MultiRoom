@@ -164,34 +164,39 @@ class RoomManager:
         return self.root / "control" / "gateway" / "routes.json"
 
     def _publish_routes(self) -> None:
-        """Atomically publish ready room routes; never mount room data in gateway."""
+        """Publish ready routes atomically under a cross-process SQLite lock.
+
+        Concurrent start/stop operations cannot race to replace a newer room
+        state with stale credentials from an earlier registry snapshot.
+        """
         folder = self.gateway_routes.parent
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         with self._connect() as database:
+            database.execute("BEGIN IMMEDIATE")
             rooms = database.execute(
                 "SELECT room_id,gateway_key_sha256 FROM rooms WHERE state='ready' "
                 "ORDER BY room_id"
             ).fetchall()
-        entries = []
-        for room in rooms:
-            token_file = self.root / "rooms" / room["room_id"] / "secrets" / "api-token"
-            if token_file.is_symlink() or not token_file.is_file():
-                raise RoomError("Ready room has an unsafe or missing internal key")
-            token = token_file.read_text(encoding="utf-8").strip()
-            if len(token) < 32:
-                raise RoomError("Ready room internal key is invalid")
-            entries.append({
-                "room_id": room["room_id"],
-                "gateway_key_sha256": room["gateway_key_sha256"],
-                "internal_token": token,
-            })
-        payload = json.dumps({"version": 1, "rooms": entries}, separators=(",", ":"))
-        temporary = folder / ("." + uuid4().hex + ".tmp")
-        try:
-            _private_text(temporary, payload)
-            os.replace(temporary, self.gateway_routes)
-        finally:
-            temporary.unlink(missing_ok=True)
+            entries = []
+            for room in rooms:
+                token_file = self.root / "rooms" / room["room_id"] / "secrets" / "api-token"
+                if token_file.is_symlink() or not token_file.is_file():
+                    raise RoomError("Ready room has an unsafe or missing internal key")
+                token = token_file.read_text(encoding="utf-8").strip()
+                if len(token) < 32:
+                    raise RoomError("Ready room internal key is invalid")
+                entries.append({
+                    "room_id": room["room_id"],
+                    "gateway_key_sha256": room["gateway_key_sha256"],
+                    "internal_token": token,
+                })
+            payload = json.dumps({"version": 1, "rooms": entries}, separators=(",", ":"))
+            temporary = folder / ("." + uuid4().hex + ".tmp")
+            try:
+                _private_text(temporary, payload)
+                os.replace(temporary, self.gateway_routes)
+            finally:
+                temporary.unlink(missing_ok=True)
 
     def initialize(self) -> None:
         if not self.root.exists():
