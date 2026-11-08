@@ -1,3 +1,4 @@
+import { roomLocalStorage } from "./roomScopedStorage.js";
 import { identityName } from "./instanceStore.js";
 import { defaultDiaryEntries } from "../data/diary.js";
 import { people } from "../data/awake.js";
@@ -150,7 +151,7 @@ export async function loadDiarySnapshot() {
       || !Array.isArray(snapshot.entries)
     ) return null;
 
-    const storedEntries = JSON.parse(window.localStorage.getItem(diaryStorageKey));
+    const storedEntries = JSON.parse(roomLocalStorage().getItem(diaryStorageKey));
 
     const userIdentity = readDiaryUserIdentity();
     const projectedEntries = isLive
@@ -159,7 +160,7 @@ export async function loadDiarySnapshot() {
     const entries = mergeSavedDiaryState(projectedEntries, storedEntries)
       .map((entry) => normalizeEntry(entry, userIdentity))
       .filter(Boolean);
-    window.localStorage.setItem(diarySnapshotStorageKey, snapshot.snapshotId);
+    roomLocalStorage().setItem(diarySnapshotStorageKey, snapshot.snapshotId);
     return entries;
   } catch {
     return null;
@@ -240,9 +241,9 @@ export async function deleteDiaryComment(entry, commentId) {
 export function forgetLocalDiaryEntry(entryId) {
   if (!entryId || /^diary-vps-\d+$/u.test(entryId)) return;
   try {
-    const saved = JSON.parse(window.localStorage.getItem(diaryStorageKey));
+    const saved = JSON.parse(roomLocalStorage().getItem(diaryStorageKey));
     if (!Array.isArray(saved)) return;
-    window.localStorage.setItem(
+    roomLocalStorage().setItem(
       diaryStorageKey,
       JSON.stringify(saved.filter((entry) => entry?.id !== entryId)),
     );
@@ -253,7 +254,7 @@ export function forgetLocalDiaryEntry(entryId) {
 
 export function readDiaryEntries() {
   try {
-    const saved = JSON.parse(window.localStorage.getItem(diaryStorageKey));
+    const saved = JSON.parse(roomLocalStorage().getItem(diaryStorageKey));
     if (!Array.isArray(saved)) return defaultDiaryEntries;
     const userIdentity = readDiaryUserIdentity();
     const entries = saved.map((entry) => {
@@ -275,7 +276,7 @@ export function readDiaryEntries() {
 
 export function storeDiaryEntries(entries) {
   try {
-    window.localStorage.setItem(diaryStorageKey, JSON.stringify(entries));
+    roomLocalStorage().setItem(diaryStorageKey, JSON.stringify(entries));
   } catch {
     // Keep the local prototype usable when browser storage is unavailable.
   }
