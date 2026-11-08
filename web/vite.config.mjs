@@ -43,9 +43,13 @@ function secretValue(name) {
 }
 
 function semanticRouteDraftPath() {
-  return String(
+  const file = String(
     process.env.SEREIN_ROUTE_DRAFT_FILE || fileURLToPath(new URL("./.runtime/semantic-route-draft.json", import.meta.url)),
   ).trim();
+  const roomId = currentRoomId();
+  // A draft can include authored domain text. Never share one draft file
+  // between independently authenticated rooms.
+  return roomId ? file + "." + roomId : file;
 }
 
 function readServerSemanticRouteDraft() {
@@ -696,7 +700,15 @@ function sereinMemoryBridge() {
     name: "serein-memory-bridge",
     configurePreviewServer(server) { sereinMemoryBridge().configureServer(server); },
     configureServer(server) {
-      const narrativePreviewJobs = createNarrativePreviewJobs();
+      const defaultNarrativePreviewJobs = createNarrativePreviewJobs();
+      const narrativeJobsByRoom = new Map();
+      const selectedNarrativeJobs = () => {
+        const roomId = currentRoomId();
+        if (!roomId) return defaultNarrativePreviewJobs;
+        if (!narrativeJobsByRoom.has(roomId))
+          narrativeJobsByRoom.set(roomId, createNarrativePreviewJobs());
+        return narrativeJobsByRoom.get(roomId);
+      };
       appearanceBridge(server, callSereinBackend, readJsonBody);
       eventMailboxBridge(server, callSereinBackend, readJsonBody);
       server.middlewares.use("/__serein/export/markdown", async (request,response)=>{
@@ -1146,7 +1158,7 @@ function sereinMemoryBridge() {
         response.setHeader("Cache-Control", "no-store");
         if (request.method === "GET") {
           const jobId = new URL(request.url, "http://localhost").searchParams.get("jobId") || "";
-          const job = narrativePreviewJobs.get(jobId);
+          const job = selectedNarrativeJobs().get(jobId);
           response.statusCode = job ? (job.state === "pending" ? 202 : job.result.statusCode) : 404;
           response.end(JSON.stringify(job
             ? (job.state === "pending" ? { status: "pending" } : job.result.payload)
@@ -1167,7 +1179,7 @@ function sereinMemoryBridge() {
             response.end(JSON.stringify({ status: "invalid", reason: "invalid_preview_request", writes_performed: [] }));
             return;
           }
-          const jobId = narrativePreviewJobs.start(async (signal) => {
+          const jobId = selectedNarrativeJobs().start(async (signal) => {
             const upstream = await callSereinDashboard("/api/narrative-rolls/preview-input", {
               method: "POST",
               signal,
