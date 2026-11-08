@@ -8,11 +8,31 @@
 
 ## 当前补丁行为
 
-- Anthropic 上游未显式指定 `thinking` 时默认尝试 extended thinking。没有设置输出上限时，Anthropic 默认 `max_tokens=16384`；自动预算 `max(1024, min(4096, max_tokens - 1024))`。`max_tokens<=1024` 时不自动开启，避免无效预算。
-- 启用 `thinking.type=enabled` 时去除不兼容的 `temperature` / `top_p`。显式关闭/指定 thinking 的请求不会被默认值覆盖。
+- **本 Fork 仅针对用户实际使用的 Claude Opus 4.6 及更新型号**，不提供 4.5 及更早型号的 thinking 参数兼容：Anthropic 上游未显式指定 `thinking` 时，默认发送 `{"type":"adaptive","display":"summarized"}`，让 Operit 等客户端收到可见思考摘要；不再自动发送旧式 `budget_tokens`。Adaptive thinking 对简单问题可能直接回答，不保证每一轮出现思考摘要。
+- Anthropic Messages API 必须带 `max_tokens`；如果客户端省略，则 Serein 默认填 `65536`。客户端提供 `max_tokens` 或 `max_completion_tokens` 时优先使用其值，不强制限制为 65536；应遵守上游真实上限（Claude Opus 4.6+ 的同步 Messages API 为 128K）。
+- Serein 将客户端自定义请求里的顶层 `output_config`（包含 `effort`）、`top_k`、`max_tokens` 等转发到 Anthropic 上游，未提供 `output_config.effort` 时保持模型供应商自己的默认 effort。
+- 使用 `thinking.type=adaptive` 时移除不兼容的 `temperature` / `top_p`。客户端**显式设置** `thinking` 时按原样传递；例如显式设置 `display=omitted` 不会被网关改回 `summarized`。但 Opus 5.5 不支持旧式 `enabled + budget_tokens` 或 `disabled`，此类显式设置可能得到上游 400。
 - 流式 `thinking_delta` 同时提供 `reasoning_content` 与原 `reasoning_details`；签名和加密思考材料仍留在 `reasoning_details`，不会作为可见文本输出。非流式回复同样提供 `message.reasoning_content`。
-- 对**自动启用 thinking** 的请求，只有收到上游 HTTP 400 时才按有限方案重试：首次取消自动 thinking，再试不超过原定上限的 8192、4096。显式 thinking 的请求不自动降级；其他 HTTP 状态不重试。错误信息仍遵循网关现有安全分类，不回显上游原始错误正文。
+- 对**自动启用 thinking** 的请求，只有收到上游 HTTP 400 时才有限重试：先移除网关自动 thinking；如果客户端未指定输出上限，可再试默认上限降为 16384、8192、4096。**客户端明确设置的 max_tokens/max_completion_tokens 不允许被偷偷调低**。显式 thinking 请求不自动降级；其他 HTTP 状态不重试。错误信息仍遵循安全分类，不回显上游原始错误正文。
 - 自动后台 Persona 任务保持不启用默认 thinking，避免改变现有该任务的非思考约定。
+
+
+## Operit 自定义请求示例
+
+通过 Serein 的 OpenAI 兼容 `POST /v1/chat/completions` 发送**顶层 JSON 字段**（具体模型名以 Serein 实际模型列表为准）：
+
+```json
+{
+  "model": "provider/claude-opus-5-5",
+  "stream": true,
+  "stream_options": {"include_usage": true},
+  "max_tokens": 120000,
+  "output_config": {"effort": "high"},
+  "messages": [{"role": "user", "content": "你好"}]
+}
+```
+
+省略 `thinking` 时 Serein 自动加 `{"type":"adaptive","display":"summarized"}`；也可在自定义请求中明确填写该对象或覆盖 display。没有填 `max_tokens` 时网关使用默认 65536。缓存输入统计会归并到 `prompt_tokens`，同时以 `prompt_tokens_details.cached_tokens` 单独报告命中数，客户端不要再次累加缓存计数。
 
 ## Token 与缓存口径
 
@@ -49,4 +69,4 @@ python -m pytest -q tests/test_anthropic_thinking_usage.py tests/test_chat_image
 
 ## 说明与限制
 
-自动 extended thinking 可能增加上游输出 token 费用，且非所有 Anthropic 兼容供应商都支持同一 `thinking` 格式。有限 400 降级用于兼容，不保证所有供应商可用。不要将这些行为误认为已经在生产 VPS 验收；当前提交仅存在于 Fork 的开发分支。GitHub Actions 工作流位于 `.github/workflows/anthropic-compat.yml`，如果 Fork 尚未启用 Actions，需要先在 GitHub 启用后才能看到运行结果。
+Adaptive thinking（尤其 `effort=max`）可能大幅增加输出 token 费用。Opus 5.5 官方默认 `effort=medium`；不应该由网关强制设为 `max`。第三方 Anthropic 兼容代理未必支持 `display=summarized` 或 `output_config.effort`；有限 400 降级只保障尝试，**不代表最终响应一定有思考摘要**。不要将这些行为误认为已经在生产 VPS 验收；当前提交仅存在于 Fork 的开发分支。GitHub Actions 工作流位于 `.github/workflows/anthropic-compat.yml`，如果 Fork 尚未启用 Actions，需要先在 GitHub 启用后才能看到运行结果。
