@@ -75,6 +75,11 @@ export function App() {
     rooms: roomDirectory.rooms,
     currentRoomId: roomDirectory.current,
     onSelect: async (roomId) => {
+      // Preserve the original Event mailbox unsaved-draft navigation guard.
+      if (activeArea === "沉淀" && !window.dispatchEvent(
+          new Event("serein:before-navigation", { cancelable: true }))) {
+        throw Error("请先保存或处理当前未完成的沉淀草稿");
+      }
       await roomRequest("/__serein/rooms/select", { room_id: roomId });
       // Reset all page caches and component identity after switching rooms.
       window.location.reload();
