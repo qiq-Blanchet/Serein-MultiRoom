@@ -134,8 +134,32 @@ def create_app(routes_file: Path, *, transport=None) -> FastAPI:
             follow_redirects=False, transport=transport,
         )
         try:
+            content = request.stream()
+            if path == "/v1/chat/completions":
+                # Explicit room hints are checked, never used as authentication.
+                # This endpoint is JSON and the underlying Serein API also
+                # materializes its full request body.
+                original_body = await request.body()
+                if len(original_body) > 64 * 1024 * 1024:
+                    await client.aclose()
+                    return _json_error(413, "Chat request exceeds gateway limit")
+                try:
+                    body = json.loads(original_body)
+                except ValueError:
+                    await client.aclose()
+                    return _json_error(400, "Invalid chat JSON")
+                if isinstance(body, dict):
+                    hints = [body.get("room_id")]
+                    opts = body.get("serein")
+                    if isinstance(opts, dict):
+                        hints.append(opts.get("room_id"))
+                    if any(hint is not None and hint != route["room_id"]
+                           for hint in hints):
+                        await client.aclose()
+                        return _json_error(403, "Room identity mismatch")
+                content = original_body
             upstream_request = client.build_request(
-                request.method, upstream_url, headers=headers, content=request.stream())
+                request.method, upstream_url, headers=headers, content=content)
             upstream = await client.send(upstream_request, stream=True)
         except httpx.HTTPError:
             await client.aclose()
