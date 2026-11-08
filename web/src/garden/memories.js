@@ -1,3 +1,4 @@
+import { roomLocalStorage } from "../storage/roomScopedStorage.js";
 import { makeFlowers } from './geometry.js';
 
 const layoutKey = 'serein.garden.memory-positions.v1';
@@ -57,7 +58,7 @@ export function assignMemorySlots(records, saved = []) {
   return [...slots];
 }
 
-export function memoryLayout(records, storage = window.localStorage) {
+export function memoryLayout(records, storage = roomLocalStorage()) {
   let saved = [];
   try {
     const parsed = JSON.parse(storage.getItem(layoutKey));
