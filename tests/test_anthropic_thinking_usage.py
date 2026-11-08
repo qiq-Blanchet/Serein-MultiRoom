@@ -215,3 +215,37 @@ def test_explicit_thinking_rejection_is_not_silently_retried(deployment, monkeyp
     assert result.status_code == 400
     assert len(seen) == 1
     assert 'secret-rejection' not in result.text
+
+
+def test_stream_auto_thinking_400_fallback_and_usage_without_stream_options(deployment, monkeypatch):
+    """Streaming retries must close rejected 400 responses and retain usage."""
+    original = httpx.AsyncClient
+    sent = []
+    rejected = []
+    def handle(request):
+        body = json.loads(request.content)
+        sent.append(body)
+        if 'thinking' in body:
+            response = httpx.Response(400, json={'error': {'message': 'private-synthetic-rejection'}})
+            rejected.append(response)
+            return response
+        event_text = ''.join('data: ' + json.dumps(event) + '\n\n' for event in sse_events())
+        return httpx.Response(200, headers={'content-type': 'text/event-stream'}, text=event_text)
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(
+        transport=httpx.MockTransport(handle), **kwargs))
+    response = deployment.post('/v1/chat/completions', json={
+        'model': 'provider/claude-sonnet',
+        'messages': [{'role': 'user', 'content': 'hello'}],
+        'stream': True, 'serein': {'memory': False},
+    })
+    assert response.status_code == 200, response.text
+    assert len(sent) == 2
+    assert 'thinking' in sent[0] and 'thinking' not in sent[1]
+    assert all(item.is_closed for item in rejected)
+    events = [json.loads(line.removeprefix('data: ')) for line in response.text.splitlines()
+              if line.startswith('data: {')]
+    assert any(row.get('choices') and row['choices'][0]['delta'].get('reasoning_content') == 'Reasoned.'
+               for row in events)
+    usage = [row['usage'] for row in events if 'usage' in row]
+    assert len(usage) == 1 and usage[0]['total_tokens'] == 65
+    assert not any(row.get('choices') == [] for row in events)
