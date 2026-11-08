@@ -67,34 +67,37 @@ def sse_events():
 
 def test_auto_thinking_budget_and_explicit_disable():
     _, _, body = request_for(model(), user_turn(temperature=0.3, top_p=0.7))
-    assert body['max_tokens'] == 16384
-    assert body['thinking'] == {'type': 'enabled', 'budget_tokens': 4096}
+    assert body['max_tokens'] == 65536
+    assert body['thinking'] == {'type': 'adaptive', 'display': 'summarized'}
     assert 'temperature' not in body and 'top_p' not in body
 
     _, _, small = request_for(model(), user_turn(max_tokens=1500))
-    assert small['thinking']['budget_tokens'] == 1024
+    assert small['thinking'] == {'type': 'adaptive', 'display': 'summarized'}
 
     _, _, tiny = request_for(model(), user_turn(max_tokens=1024))
-    assert 'thinking' not in tiny
+    assert tiny['thinking'] == {'type': 'adaptive', 'display': 'summarized'}
 
     _, _, disabled = request_for(model(), user_turn(thinking={'type': 'disabled'}))
     assert disabled['thinking'] == {'type': 'disabled'}
 
     _, _, explicit = request_for(model(), user_turn(
-        thinking={'type': 'enabled', 'budget_tokens': 2048}, max_tokens=4096, temperature=0.5))
-    assert explicit['thinking']['budget_tokens'] == 2048
+        thinking={'type': 'adaptive', 'display': 'summarized'}, max_tokens=4096, temperature=0.5))
+    assert explicit['thinking'] == {'type': 'adaptive', 'display': 'summarized'}
     assert 'temperature' not in explicit
 
 
 def test_fallback_never_changes_explicit_thinking_or_increases_budget():
     assert relax_plan(model(), user_turn(thinking={'type': 'low'})) == []
     plan = relax_plan(model(), user_turn())
-    assert len(plan) == 3
+    assert len(plan) == 4
     bodies = [request_for(model(), item)[2] for item in plan]
-    assert [b['max_tokens'] for b in bodies] == [16384, 8192, 4096]
+    assert [b['max_tokens'] for b in bodies] == [65536, 16384, 8192, 4096]
     assert all('thinking' not in body for body in bodies)
-    assert len(relax_plan(model(), user_turn(max_tokens=2048))) == 1
-    assert not relax_plan(model(), user_turn(max_tokens=1024))
+    # Caller-specified limits cannot be reduced by automatic fallback.
+    assert [request_for(model(), p)[2]['max_tokens']
+            for p in relax_plan(model(), user_turn(max_tokens=2048))] == [2048]
+    assert [request_for(model(), p)[2]['max_tokens']
+            for p in relax_plan(model(), user_turn(max_tokens=1024))] == [1024]
 
 
 def test_nonstream_reasoning_content_and_usage():
@@ -188,7 +191,7 @@ def test_http_stream_emits_single_final_openai_usage_chunk(deployment, monkeypat
     payloads = [json.loads(line.removeprefix('data: ')) for line in result.text.splitlines()
                 if line.startswith('data: {')]
     assert '[DONE]' in result.text
-    assert sent and sent[0]['thinking']['type'] == 'enabled'
+    assert sent and sent[0]['thinking'] == {'type': 'adaptive', 'display': 'summarized'}
     assert any(row.get('choices') and row['choices'][0]['delta'].get('reasoning_content') == 'Reasoned.'
                for row in payloads)
     receipts = [row for row in payloads if 'usage' in row]
@@ -249,3 +252,38 @@ def test_stream_auto_thinking_400_fallback_and_usage_without_stream_options(depl
     usage = [row['usage'] for row in events if 'usage' in row]
     assert len(usage) == 1 and usage[0]['total_tokens'] == 65
     assert not any(row.get('choices') == [] for row in events)
+
+
+@pytest.mark.parametrize('model_name', ['claude-opus-4-6', 'claude-opus-5-5'])
+def test_adaptive_custom_output_config_and_max_tokens_forwarded(model_name):
+    route = {**model(), 'model': model_name}
+    _, _, body = request_for(route, user_turn(
+        max_tokens=128000,
+        output_config={'effort': 'max'},
+        top_k=32,
+    ))
+    assert body['max_tokens'] == 128000
+    assert body['thinking'] == {'type': 'adaptive', 'display': 'summarized'}
+    assert body['output_config'] == {'effort': 'max'}
+    assert body['top_k'] == 32
+
+    _, _, alternative = request_for(route, user_turn(
+        max_completion_tokens=100000, output_config={'effort': 'high'},
+        thinking={'type': 'adaptive', 'display': 'summarized'},
+    ))
+    assert alternative['max_tokens'] == 100000
+    assert alternative['output_config'] == {'effort': 'high'}
+    assert alternative['thinking']['display'] == 'summarized'
+
+
+def test_explicit_client_limits_and_thinking_override_gateway_defaults():
+    _, _, body = request_for(model(), user_turn(
+        max_tokens=120000,
+        output_config={'effort': 'medium'},
+        thinking={'type': 'adaptive', 'display': 'omitted'},
+    ))
+    assert body['max_tokens'] == 120000
+    assert body['thinking'] == {'type': 'adaptive', 'display': 'omitted'}
+    assert body['output_config']['effort'] == 'medium'
+    assert [request_for(model(), attempt)[2]['max_tokens']
+            for attempt in relax_plan(model(), user_turn(max_tokens=120000))] == [120000]
