@@ -1360,10 +1360,12 @@ class ClientContext:
         return upstream_payload
 
     def _anthropic_max_tokens(self, payload: dict[str, Any]) -> int:
+        # Keep in sync with model_runtime.ASSUMED_ANTHROPIC_MAX_TOKENS.
+        # The old 1024 fallback left no room for extended thinking.
         try:
-            return max(1, int(payload.get("max_tokens") or payload.get("max_completion_tokens") or self.gateway_cfg.get("anthropic_max_tokens") or 1024))
+            return max(1, int(payload.get("max_tokens") or payload.get("max_completion_tokens") or self.gateway_cfg.get("anthropic_max_tokens") or 16384))
         except (TypeError, ValueError):
-            return 1024
+            return 16384
 
     def _apply_anthropic_prompt_cache(
         self,
@@ -1531,6 +1533,7 @@ class ClientContext:
             reasoning_text = self._reasoning_text_from_details(reasoning_details)
             if reasoning_text:
                 message["reasoning"] = reasoning_text
+                message["reasoning_content"] = reasoning_text
         if tool_calls:
             message["tool_calls"] = tool_calls
         return message
