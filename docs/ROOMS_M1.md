@@ -74,4 +74,4 @@ python3 scripts/rooms.py --root /srv/serein-multiroom-test stop <ROOM_ID>
 
 **仍需实机验证**：用隔离的 Docker 测试 VPS 同时启动两间房间、验证两个核心服务健康、数据及后台任务运行互不干扰。
 
-**下一步按设计规范推进：** M2 统一 Key 鉴权与 Chat/MCP 静态路由；M3 统一管理网页、房间切换、配置与工具开关；随后性能、OAuth、备份、更新和迁移。不要因为已有 M1 CLI 就将项目标记为可生产使用。
+**进展更新（2026-11-09）：** M2 的 Chat/MCP 静态 Bearer 统一路由与离线测试已在 [ROOMS_M2.md](ROOMS_M2.md) 实现；仍需真实 Docker 双房实机验收。接下来是 M3 统一管理网页、房间切换、配置与工具开关，以及后续 OAuth、备份、更新和迁移。不要因为已有 M1 CLI 就将项目标记为可生产使用。
