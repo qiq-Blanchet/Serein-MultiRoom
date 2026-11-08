@@ -46,6 +46,51 @@ const readAreaFromHash = () => {
 export function App() {
   const root = useRef(null);
   const [activeArea, setActiveArea] = useState(readAreaFromHash);
+  // Optional M3 rooms. Legacy single-room navigation remains untouched.
+  const [roomDirectory, setRoomDirectory] = useState(null);
+  const refreshRooms = useCallback(async () => {
+    const response = await fetch("/__serein/rooms", {
+      cache: "no-store", credentials: "same-origin",
+    });
+    if (!response.ok) throw Error("房间列表暂不可用");
+    const result = await response.json();
+    if (!Array.isArray(result.rooms)) throw Error("房间列表格式不正确");
+    setRoomDirectory(result);
+    return result;
+  }, []);
+  useEffect(() => {
+    refreshRooms().catch(() => setRoomDirectory(null));
+  }, [refreshRooms]);
+  const roomRequest = async (path, body) => {
+    const response = await fetch(path, {
+      method: "POST", cache: "no-store", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    if (!response.ok) throw Error(response.status === 409
+      ? "房间尚未就绪，请先启动" : "房间操作失败，请检查管理员服务");
+    return response.json();
+  };
+  const roomSwitcher = roomDirectory ? {
+    rooms: roomDirectory.rooms,
+    currentRoomId: roomDirectory.current,
+    onSelect: async (roomId) => {
+      await roomRequest("/__serein/rooms/select", { room_id: roomId });
+      // Reset all page caches and component identity after switching rooms.
+      window.location.reload();
+    },
+    onCreate: async (fields) => {
+      const created = await roomRequest("/__serein/rooms", fields);
+      await refreshRooms();
+      return created;
+    },
+    onAction: async (roomId, action) => {
+      if (!["start", "stop"].includes(action)) throw Error("未知房间操作");
+      await roomRequest("/__serein/rooms/" + roomId + "/" + action, {});
+      await refreshRooms();
+    },
+  } : null;
+
   const [helpPage, setHelpPage] = useState(null);
   const [, refreshIdentity] = useState(0);
   useEffect(() => {
@@ -154,12 +199,12 @@ export function App() {
 
       {activeArea === "沉淀" && <section className="mailbox-page" aria-label="沉淀">
         <EventMailboxPage onOpenMemory={() => navigateTo("记忆")} onOpenSettings={() => {window.dispatchEvent(new CustomEvent("serein:open-settings-tab", {detail:"features"}));navigateTo("设置");}} />
-        <Sidebar activeArea={activeArea} onNavigate={navigateTo} onOpenSettings={() => setSettingsOpen(true)} />
+        <Sidebar roomSwitcher={roomSwitcher} activeArea={activeArea} onNavigate={navigateTo} onOpenSettings={() => setSettingsOpen(true)} />
       </section>}
 
       {activeArea === "换窗" && <section className="resume-page" aria-label="换窗">
         <ResumePage onOpenSettings={() => { window.dispatchEvent(new CustomEvent("serein:open-settings-tab", {detail:"features"})); navigateTo("设置"); }}/>
-        <Sidebar activeArea={activeArea} onNavigate={navigateTo} onOpenSettings={() => setSettingsOpen(true)}/>
+        <Sidebar roomSwitcher={roomSwitcher} activeArea={activeArea} onNavigate={navigateTo} onOpenSettings={() => setSettingsOpen(true)}/>
       </section>}
 
       {activeArea === "使用说明" && <section className="help-page" aria-label="使用说明">
@@ -170,12 +215,12 @@ export function App() {
             navigateTo("设置");
           }} /></div>
         </div>
-        <Sidebar activeArea={activeArea} onNavigate={navigateTo} onOpenSettings={() => setSettingsOpen(true)} />
+        <Sidebar roomSwitcher={roomSwitcher} activeArea={activeArea} onNavigate={navigateTo} onOpenSettings={() => setSettingsOpen(true)} />
       </section>}
 
       <section className="memory-page" aria-label="记忆" hidden={activeArea !== "记忆"}>
         {activeArea === "记忆" ? <MemoryPage /> : null}
-        <Sidebar
+        <Sidebar roomSwitcher={roomSwitcher}
           activeArea={activeArea}
           onNavigate={navigateTo}
           onUnavailable={showUnavailable}
@@ -185,7 +230,7 @@ export function App() {
 
       <section className="narrative-page" aria-label="叙事卷" hidden={activeArea !== "叙事卷"}>
         <NarrativePage />
-        <Sidebar
+        <Sidebar roomSwitcher={roomSwitcher}
           activeArea={activeArea}
           onNavigate={navigateTo}
           onUnavailable={showUnavailable}
@@ -195,7 +240,7 @@ export function App() {
 
       <section className="diary-page" aria-label="日记" hidden={activeArea !== "日记"}>
         <DiaryPage />
-        <Sidebar
+        <Sidebar roomSwitcher={roomSwitcher}
           activeArea={activeArea}
           onNavigate={navigateTo}
           onUnavailable={showUnavailable}
@@ -205,7 +250,7 @@ export function App() {
 
       <section className="basement-page" aria-label="地下室" hidden={activeArea !== "地下室"}>
         <BasementPage />
-        <Sidebar
+        <Sidebar roomSwitcher={roomSwitcher}
           activeArea={activeArea}
           onNavigate={navigateTo}
           onUnavailable={showUnavailable}
@@ -215,7 +260,7 @@ export function App() {
 
       {["心绪", "备忘"].includes(activeArea) && <section className="companion-page" aria-label={activeArea}>
         {activeArea === "心绪" ? <PersonaPage /> : <MemosPage />}
-        <Sidebar activeArea={activeArea} onNavigate={navigateTo} onOpenSettings={() => setSettingsOpen(true)} />
+        <Sidebar roomSwitcher={roomSwitcher} activeArea={activeArea} onNavigate={navigateTo} onOpenSettings={() => setSettingsOpen(true)} />
       </section>}
 
       {activeArea === "花园" && <section className="garden-page" aria-label="花园">
