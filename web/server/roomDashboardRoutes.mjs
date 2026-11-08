@@ -44,10 +44,11 @@ function fields(room) {
 export async function dashboardRoomEndpoint(req, res, {
     path, publicOrigin, adminKey, routesFile, adminURL, fetchImpl = fetch,
 }) {
-  if (!['/__serein/rooms', '/__serein/rooms/select', '/__serein/rooms/current'].includes(path)) return false;
+  const action = /^\/__serein\/rooms\/([a-f0-9]{32})\/(start|stop)$/.exec(path);
+  if (!action && !['/__serein/rooms', '/__serein/rooms/select', '/__serein/rooms/current'].includes(path)) return false;
   const origin = publicOrigin || new URL('http://' + req.headers.host);
   if (!sameOrigin(req, origin)) { send(res, 403, {detail:'Same-origin request required'}); return true; }
-  if (path === '/__serein/rooms/select' && req.method !== 'POST'
+  if ((action || path === '/__serein/rooms/select') && req.method !== 'POST'
       || path === '/__serein/rooms/current' && req.method !== 'GET'
       || path === '/__serein/rooms' && !['GET','POST'].includes(req.method)) {
     send(res, 405, {detail:'Method not allowed'});return true;
@@ -56,6 +57,21 @@ export async function dashboardRoomEndpoint(req, res, {
   const selected = effectiveRoom(req.headers.cookie, adminKey, ready);
   if (path === '/__serein/rooms/current') {
     send(res, 200, {room_id:selected?.room_id || null, enabled:true}); return true;
+  }
+  if (action) {
+    const responseUrl = new URL('/api/rooms/' + action[1] + '/' + action[2], adminURL);
+    try {
+      const response = await fetchImpl(responseUrl, {
+        method:'POST', redirect:'manual',
+        headers:{'Authorization':'Bearer ' + adminKey, 'Accept':'application/json'},
+        signal:AbortSignal.timeout(60000),
+      });
+      if (!response.ok) { send(res,response.status === 409 ? 409 : 502,
+                             {detail:'Room lifecycle operation failed'}); return true; }
+      const room = await response.json();
+      send(res,200,{room:fields(room)});
+    } catch {send(res,502,{detail:'Room lifecycle administrator unavailable'});}
+    return true;
   }
   if (path === '/__serein/rooms/select') {
     if (!String(req.headers['content-type']||'').startsWith('application/json')) {
