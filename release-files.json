@@ -633,5 +633,12 @@
   "src/serein/room_admin.py",
   "src/serein/rooms_ui.html",
   "src/serein/rooms_ui.js",
-  "docs/ROOMS_M3_PHASE1.md"
+  "docs/ROOMS_M3_PHASE1.md",
+  "web/server/roomSession.mjs",
+  "web/server/roomContext.mjs",
+  "web/server/roomDashboardRoutes.mjs",
+  "web/src/components/RoomSwitcher.jsx",
+  "web/src/storage/roomScopedStorage.js",
+  "web/tests/room-session.test.mjs",
+  "web/tests/room-dashboard-routes.test.mjs"
 ]
