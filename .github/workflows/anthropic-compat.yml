@@ -33,3 +33,20 @@ jobs:
           tests/test_room_admin.py
       - name: Verify reviewed release manifest
         run: python scripts/release.py /tmp/serein-multiroom-test.zip
+
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install the unchanged original Dashboard dependencies
+        run: npm ci --prefix web
+      - name: Check authenticated multi-room routing and storage tests
+        run: node --test web/tests/room-session.test.mjs web/tests/room-dashboard-routes.test.mjs
+      - name: Build original React Dashboard with opt-in room selector
+        run: npm --prefix web run build
+      - name: Check web gateway JavaScript syntax
+        run: node --check web/server/gateway.mjs
