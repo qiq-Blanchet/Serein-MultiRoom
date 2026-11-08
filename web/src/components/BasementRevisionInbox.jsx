@@ -1,3 +1,4 @@
+import { roomSessionStorage } from "../storage/roomScopedStorage.js";
 import { useEffect, useMemo, useState } from "react";
 import { Archive, ArrowClockwise, Check, NotePencil, WarningCircle } from "@phosphor-icons/react";
 
@@ -69,7 +70,7 @@ export function BasementRevisionInbox() {
 
   const openNarrativeRewrite = (item) => {
     if (!String(item.narrative_id || "").startsWith("narrative_")) return;
-    window.sessionStorage.setItem("serein:narrative-rewrite-intent", item.narrative_id);
+    roomSessionStorage().setItem("serein:narrative-rewrite-intent", item.narrative_id);
     window.location.hash = "#narrative";
   };
 
