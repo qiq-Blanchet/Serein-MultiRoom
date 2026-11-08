@@ -97,7 +97,8 @@ const server = http.createServer((req, res) => {
     res.writeHead(401); res.end('Bearer token required'); return;
   }
   if (multiRoom && path.startsWith('/__serein/rooms')
-      && ['/__serein/rooms','/__serein/rooms/select','/__serein/rooms/current'].includes(path)) {
+      && (['/__serein/rooms','/__serein/rooms/select','/__serein/rooms/current'].includes(path)
+          || /^\/__serein\/rooms\/[a-f0-9]{32}\/(start|stop)$/.test(path))) {
     void dashboardRoomEndpoint(req, res, {
       path, publicOrigin, adminKey,
       routesFile:process.env.SEREIN_MULTIROOM_ROUTES_FILE,
