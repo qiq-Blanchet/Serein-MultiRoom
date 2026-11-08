@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Header, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
 from ..deployment import read_settings, task_model, chat_models, client_model_id
 from ..chat_context import ClientContext
-from ..model_runtime import request_for, AnthropicStream, complete, UpstreamError, safe_upstream_http_error
+from ..model_runtime import AnthropicStream, complete, upstream_send_relaxing, UpstreamError, safe_upstream_http_error
 from ..core.store import digest, encode, Conflict
 from .. import chat_resume
 from ..chat_observation import ChatObservation, recall_summary
@@ -354,10 +354,9 @@ def routes(settings, services, auth):
                 raise HTTPException(502,'Upstream request failed or returned an invalid response') from None
             completed(message)
             return JSONResponse(result,headers=headers_out,background=background_tasks)
-        url,headers,payload = request_for(model,body,window_id=window_id)
         client = httpx.AsyncClient(timeout=120,follow_redirects=False)
         try:
-            response = await client.send(client.build_request('POST',url,headers=headers,json=payload),stream=True)
+            response = await upstream_send_relaxing(client,model,body,window_id=window_id)
             if not response.is_success:
                 await response.aread()
                 too_long = headers_out['X-Serein-Resume']=='loaded' and chat_resume.context_limit(response)
@@ -374,6 +373,8 @@ def routes(settings, services, auth):
         async def chunks():
             stream_state={'message':{'role':'assistant','content':'','reasoning_content':''},'tool_calls_by_index':{}}
             converter=AnthropicStream(model['model']) if model.get('protocol')=='anthropic' else None
+            stream_options=body.get('stream_options')
+            include_usage=(isinstance(stream_options,dict) and stream_options.get('include_usage') is True)
             finished=False;failed=False
             try:
                 async for line in response.aiter_lines():
@@ -386,6 +387,10 @@ def routes(settings, services, auth):
                         if event.get('type')=='message_stop':finished=True;break
                         event=converter.convert(event)
                         if event is None:continue
+                        # The optional OpenAI usage-only chunk is the single
+                        # source of final usage when include_usage is requested.
+                        if include_usage:
+                            event.pop('usage',None)
                     if event.get('error'):failed=True
                     for choice in event.get('choices',[]):
                         if choice.get('index',0)==0:
@@ -393,6 +398,10 @@ def routes(settings, services, auth):
                     yield ('data: '+json.dumps(event,ensure_ascii=False)+'\n\n').encode()
                 if finished and not failed:
                     completed(context._build_stream_assistant_message(stream_state))
+                    if converter and include_usage and converter.final_usage is not None:
+                        receipt={'id':converter.identifier,'object':'chat.completion.chunk','created':int(time.time()),
+                                 'model':converter.model,'choices':[],'usage':converter.final_usage}
+                        yield ('data: '+json.dumps(receipt,ensure_ascii=False)+'\n\n').encode()
                     yield b'data: [DONE]\n\n'
                 elif not failed:
                     yield b'data: {"error":{"message":"Upstream stream ended before completion"}}\n\n'
