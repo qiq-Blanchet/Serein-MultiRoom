@@ -134,3 +134,81 @@ class DockerRuntime:
         state = self.inspect(manager, room)
         if state and state.get("State", {}).get("Running"):
             self._docker("container", "stop", "--time", "15", self.container_name(manager, room))
+
+    # The M2 gateway is also a Docker service, but it gets ONLY the central
+    # routing manifest, never other rooms' private DB/index/backup directories.
+    @staticmethod
+    def gateway_name(manager):
+        return f"serein-gateway-{manager.namespace}"
+
+    def gateway_inspect(self, manager):
+        name = self.gateway_name(manager)
+        response = self._docker("container", "inspect", name, check=False)
+        if response.returncode:
+            return None
+        try:
+            state = json.loads(response.stdout)[0]
+        except (ValueError, IndexError, TypeError) as exc:
+            raise RoomError("Malformed gateway Docker inspect response") from exc
+        labels = state.get("Config", {}).get("Labels") or {}
+        if (labels.get("serein.multiroom.gateway") != "true" or
+                labels.get("serein.multiroom.installation") != manager.namespace):
+            raise RoomError("Gateway container name is occupied by another service")
+        return state
+
+    def gateway_status(self, manager):
+        state = self.gateway_inspect(manager)
+        if state is None:
+            return {"container": "absent", "health": "unknown"}
+        status = state.get("State") or {}
+        return {
+            "container": status.get("Status", "unknown"),
+            "health": (status.get("Health") or {}).get("Status", "unknown"),
+        }
+
+    def start_gateway(self, manager, *, bind="127.0.0.1", port=18219):
+        if bind != "127.0.0.1":
+            raise RoomError("M2 gateway may only bind to loopback; use a TLS reverse proxy")
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise RoomError("Invalid gateway port")
+        manager.initialize()
+        if self._docker("image", "inspect", manager.image, check=False).returncode:
+            raise RoomError("Shared image not found; build the multi-room image first")
+        self._ensure_network(manager)
+        prior = self.gateway_inspect(manager)
+        if prior:
+            if not prior.get("State", {}).get("Running"):
+                self._docker("container", "start", self.gateway_name(manager))
+            return self.gateway_status(manager)
+        routes_dir = manager.gateway_routes.parent
+        if routes_dir.is_symlink() or not manager.gateway_routes.is_file():
+            raise RoomError("Gateway route manifest is not available")
+        self._docker(
+            "run", "--detach", "--init",
+            "--name", self.gateway_name(manager),
+            "--restart", "unless-stopped",
+            "--label", "serein.multiroom.gateway=true",
+            "--label", "serein.multiroom.installation=" + manager.namespace,
+            "--network", manager.network,
+            "--publish", f"{bind}:{port}:8080",
+            "--memory", "256m", "--cpus", "0.5", "--pids-limit", "128",
+            "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+            "--read-only", "--tmpfs", "/tmp:rw,nosuid,noexec,size=16m",
+            "--health-cmd", HEALTH_CMD.replace("8011", "8080"),
+            "--health-interval", "10s",
+            "--health-timeout", "5s",
+            "--health-retries", "12",
+            "--mount", f"type=bind,src={routes_dir},dst=/control,readonly",
+            "--entrypoint", "python",
+            manager.image, "-m", "serein.room_gateway",
+            "--routes-file", "/control/routes.json",
+            "--host", "0.0.0.0", "--port", "8080",
+        )
+        return self.gateway_status(manager)
+
+    def stop_gateway(self, manager):
+        state = self.gateway_inspect(manager)
+        if state and state.get("State", {}).get("Running"):
+            self._docker("container", "stop", "--time", "15",
+                         self.gateway_name(manager))
+        return self.gateway_status(manager)
