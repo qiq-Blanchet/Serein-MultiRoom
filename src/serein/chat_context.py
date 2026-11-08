@@ -1340,9 +1340,12 @@ class ClientContext:
         if system_parts:
             upstream_payload["system"] = "\n\n".join(system_parts)
 
-        for field in ("temperature", "top_p", "stream"):
+        # OpenAI clients can supply Anthropic-native request parameters in
+        # their custom JSON body. Preserve these explicitly instead of dropping
+        # them during the Chat Completions -> Messages conversion.
+        for field in ("temperature", "top_p", "top_k", "stream", "output_config"):
             if field in payload:
-                upstream_payload[field] = payload[field]
+                upstream_payload[field] = deepcopy(payload[field])
         thinking = payload.get("_serein_anthropic_thinking")
         if isinstance(thinking, dict):
             upstream_payload["thinking"] = deepcopy(thinking)
@@ -1360,12 +1363,21 @@ class ClientContext:
         return upstream_payload
 
     def _anthropic_max_tokens(self, payload: dict[str, Any]) -> int:
+        # Anthropic Messages requires max_tokens even if the OpenAI-compatible
+        # client omitted it. A client-provided limit always overrides the
+        # gateway's 65536-token default; do not clamp high custom values.
         # Keep in sync with model_runtime.ASSUMED_ANTHROPIC_MAX_TOKENS.
-        # The old 1024 fallback left no room for extended thinking.
+        raw = payload.get("max_tokens")
+        if raw is None:
+            raw = payload.get("max_completion_tokens")
+        if raw is None:
+            raw = self.gateway_cfg.get("anthropic_max_tokens")
+        if raw is None:
+            raw = 65536
         try:
-            return max(1, int(payload.get("max_tokens") or payload.get("max_completion_tokens") or self.gateway_cfg.get("anthropic_max_tokens") or 16384))
+            return max(1, int(raw))
         except (TypeError, ValueError):
-            return 16384
+            return 65536
 
     def _apply_anthropic_prompt_cache(
         self,
