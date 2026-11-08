@@ -1,6 +1,6 @@
 # Serein Multi-Room：M2 分房间 Chat/MCP 静态鉴权网关
 
-> **当前状态（2026-11-09）**：M2 基础代码已写入 `feature/multi-room`，合成数据测试正在验收；**尚未在真实 VPS 或 Operit 上测试**。此处不包含统一管理网页和 OAuth。架构约束以 [MULTI_ROOM_SPEC.md](MULTI_ROOM_SPEC.md) 为准。
+> **当前状态（2026-11-09）**：M2 基础代码已写入 `feature/multi-room`，合成数据与双实际 Serein 应用的离线 CI 已通过；**尚未在真实 VPS 或 Operit 上测试**。此处不包含统一管理网页和 OAuth。架构约束以 [MULTI_ROOM_SPEC.md](MULTI_ROOM_SPEC.md) 为准。
 
 ## M2 的边界
 
