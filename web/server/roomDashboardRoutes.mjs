@@ -78,7 +78,7 @@ export async function dashboardRoomEndpoint(req, res, {
   if (req.method === 'POST') {
     try {body = await readBody(req);} catch {send(res,400,{detail:'Invalid room creation request'});return true;}
     if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 80
-        || !['first','blank',...ready.map(x => x.room_id)].includes(body.source || 'first')
+        || !(body.source === undefined || ['first','blank'].includes(body.source) || /^[a-f0-9]{32}$/.test(body.source))
         || (body.reuse_provider_keys !== undefined && typeof body.reuse_provider_keys !== 'boolean')
         || Object.keys(body).some(k => !['name','source','reuse_provider_keys'].includes(k))) {
       send(res,400,{detail:'Invalid room parameters'});return true;
@@ -88,8 +88,8 @@ export async function dashboardRoomEndpoint(req, res, {
   try {
     const base = new URL(adminURL);
     if (base.username || base.password || base.pathname !== '/' || base.search || base.hash
-        || !['localhost','127.0.0.1','[::1]'].includes(base.hostname)
-        && base.protocol !== 'http:') {
+        || base.protocol !== 'http:'
+        || !['localhost','127.0.0.1','[::1]','serein-room-admin'].includes(base.hostname)) {
       throw Error('Invalid private administrator service URL');
     }
     const response = await fetchImpl(new URL('/api/rooms', base), {
