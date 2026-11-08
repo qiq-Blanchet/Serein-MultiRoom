@@ -44,6 +44,11 @@ def parser_for_rooms():
         item = commands.add_parser(command)
         item.add_argument("room_id")
     commands.choices["start"].add_argument("--wait", type=int, default=45)
+    gateway = commands.add_parser("gateway-start",
+                                  help="Start the shared Chat/MCP proxy bound to loopback")
+    gateway.add_argument("--port", type=int, default=18219)
+    commands.add_parser("gateway-stop")
+    commands.add_parser("gateway-status")
     return parser
 
 
@@ -69,6 +74,13 @@ def main(argv=None):
     elif args.command == "build":
         runtime.build(ROOT, manager.image)
         result = {"image": manager.image}
+    elif args.command == "gateway-start":
+        result = runtime.start_gateway(manager, port=args.port)
+    elif args.command == "gateway-stop":
+        result = runtime.stop_gateway(manager)
+    elif args.command == "gateway-status":
+        manager.initialize()
+        result = runtime.gateway_status(manager)
     elif args.command == "show":
         result = manager.get(args.room_id)
     elif args.command == "status":
