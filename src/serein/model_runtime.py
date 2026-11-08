@@ -15,50 +15,42 @@ from .timeout_diagnostics import annotate_timeout
 
 logger = logging.getLogger(__name__)
 
-ASSUMED_ANTHROPIC_MAX_TOKENS = 16384
+ASSUMED_ANTHROPIC_MAX_TOKENS = 65536
 
 
 def anthropic_thinking_default(model, payload):
-    """Enable bounded thinking by default without overriding an explicit choice."""
+    """Enable visible adaptive thinking for Claude 4.6+ unless caller overrides.
+
+    The gateway only injects this when the client has not supplied 'thinking'.
+    User-supplied output_config/effort is handled by the Messages adapter.
+    """
     if (model.get('protocol') != 'anthropic' or 'thinking' in payload
             or payload.get('_serein_skip_auto_thinking')):
         return payload
-    try:
-        limit = int(payload.get('max_tokens') or ASSUMED_ANTHROPIC_MAX_TOKENS)
-    except (TypeError, ValueError):
-        return payload
-    # Anthropic requires budget_tokens strictly smaller than max_tokens.
-    if limit <= 1024:
-        return payload
     result = dict(payload)
-    result['thinking'] = {'type': 'enabled', 'budget_tokens': max(1024, min(4096, limit - 1024))}
+    result['thinking'] = {'type': 'adaptive', 'display': 'summarized'}
     result.pop('temperature', None)
     result.pop('top_p', None)
     return result
 
 
 def relax_plan(model, payload):
-    """Bounded 400-only fallback for automatically added thinking.
+    """Fallback only gateway-added thinking on HTTP 400.
 
-    Do not rewrite explicitly requested thinking or increase max_tokens.
+    Respect user-specified max_tokens or max_completion_tokens on every
+    attempt; reduce only the auto-assigned default if provider limits require
+    it. Never alter explicitly supplied thinking.
     """
     if (model.get('protocol') != 'anthropic' or 'thinking' in payload
             or payload.get('_serein_skip_auto_thinking')):
         return []
-    try:
-        limit = int(payload.get('max_tokens') or payload.get('max_completion_tokens')
-                    or ASSUMED_ANTHROPIC_MAX_TOKENS)
-    except (TypeError, ValueError):
-        return []
-    if limit <= 1024:
-        return []
     bare = {**payload, '_serein_skip_auto_thinking': True}
     attempts = [bare]
-    for maximum in (8192, 4096):
-        if limit > maximum:
-            attempts.append({**bare, 'max_tokens': maximum})
+    if payload.get('max_tokens') is None and payload.get('max_completion_tokens') is None:
+        for limit in (16384, 8192, 4096):
+            if ASSUMED_ANTHROPIC_MAX_TOKENS > limit:
+                attempts.append({**bare, 'max_tokens': limit})
     return attempts
-
 
 def normalize_anthropic_usage(usage):
     """Normalize Anthropic usage without losing or double-counting cache tokens."""
@@ -173,7 +165,7 @@ def request_for(model, payload, *, window_id=''):
         converted = adapter._anthropic_payload_for_upstream(payload, {'upstream': model, 'upstream_model': model['model']})
         if 'thinking' not in payload and not payload.get('_serein_skip_auto_thinking'):
             converted = anthropic_thinking_default(model, converted)
-        if isinstance(converted.get('thinking'), dict) and converted['thinking'].get('type') == 'enabled':
+        if isinstance(converted.get('thinking'), dict) and converted['thinking'].get('type') in ('enabled', 'adaptive'):
             converted.pop('temperature', None)
             converted.pop('top_p', None)
         if isinstance(payload.get('reasoning'), dict) and (
