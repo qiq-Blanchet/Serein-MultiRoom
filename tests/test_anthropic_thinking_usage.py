@@ -1,5 +1,6 @@
 """Offline regression tests for Anthropic thinking and cache-aware usage."""
 import json
+import asyncio
 
 import httpx
 import pytest
@@ -133,8 +134,7 @@ def test_stream_reasoning_and_merged_usage_are_not_double_counted():
     }
 
 
-@pytest.mark.asyncio
-async def test_nonstream_auto_thinking_retries_only_http_400(monkeypatch):
+def test_nonstream_auto_thinking_retries_only_http_400(monkeypatch):
     seen = []
     original = httpx.AsyncClient
 
@@ -147,7 +147,7 @@ async def test_nonstream_auto_thinking_retries_only_http_400(monkeypatch):
 
     monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(
         transport=httpx.MockTransport(handle), **kwargs))
-    result = await complete(model(), user_turn())
+    result = asyncio.run(complete(model(), user_turn()))
     assert result['choices'][0]['message']['reasoning_content'] == 'Reasoned.'
     assert len(seen) == 2
     assert 'thinking' in seen[0] and 'thinking' not in seen[1]
