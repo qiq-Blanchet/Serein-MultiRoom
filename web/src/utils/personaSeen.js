@@ -1,7 +1,8 @@
+import { roomLocalStorage } from "../storage/roomScopedStorage.js";
 const prefix = 'serein.persona.seen.v1:';
 const memory = new Map();
 
-export function readPersonaSeen(scope, storage = window.localStorage) {
+export function readPersonaSeen(scope, storage = roomLocalStorage()) {
   const key = prefix + scope;
   try {
     const value = storage.getItem(key);
@@ -10,7 +11,7 @@ export function readPersonaSeen(scope, storage = window.localStorage) {
   return memory.get(key) ?? null;
 }
 
-export function writePersonaSeen(scope, id, storage = window.localStorage) {
+export function writePersonaSeen(scope, id, storage = roomLocalStorage()) {
   const key = prefix + scope;
   memory.set(key, id);
   try { storage.setItem(key, String(id)); } catch { /* Session-only fallback. */ }
