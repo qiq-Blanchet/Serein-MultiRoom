@@ -46,13 +46,16 @@ def fake_transport(manager, calls):
         data = await request.aread()
         calls.append((room_id, request.url.path, request.method, request.headers, data))
         if request.url.path in ("/mcp", "/serein/mcp"):
+            sse = 'event: message\n' + 'data: {"result":"private-mcp"}\n\n'
             return httpx.Response(200, headers={
                 "Content-Type": "text/event-stream", "Mcp-Session-Id": "session-" + room_id,
-            }, text="event: message\\ndata: {\"result\":\"private-mcp\"}\\n\\n")
-        return httpx.Response(200, json={
+            }, stream=httpx.ByteStream(sse.encode("utf-8")))
+        payload = {
             "room": room_id,
             "choices": [{"message": {"role": "assistant", "content": "reply-" + room_id}}],
-        })
+        }
+        return httpx.Response(200, headers={"content-type": "application/json"},
+                              stream=httpx.ByteStream(json.dumps(payload).encode("utf-8")))
     return httpx.MockTransport(handle)
 
 
