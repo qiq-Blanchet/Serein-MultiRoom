@@ -1,3 +1,4 @@
+import { roomLocalStorage } from "./roomScopedStorage.js";
 // Canonical personal records; old browser data is imported without overwriting newer server state.
 const records = new Map();
 let ready;
@@ -5,7 +6,7 @@ const memoryKey = "serein.memory.scene-records.v1";
 const reviewKey = "serein.basement.recall-observation-review.v1";
 const simulationKey = "serein.basement.recall-simulation-training.v1";
 const importKey = "serein.personal.imported.v1";
-const read = (key, fallback) => { try { return JSON.parse(window.localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
+const read = (key, fallback) => { try { return JSON.parse(roomLocalStorage().getItem(key)) ?? fallback; } catch { return fallback; } };
 
 async function request(path, body) {
   const response = await fetch(`/__serein/personal${path}`, {
@@ -53,18 +54,18 @@ export async function loadPersonalScope(scope) {
 
 export function initializePersonal() {
   if (!ready) ready = (async () => {
-    if (!window.localStorage.getItem(importKey)) {
+    if (!roomLocalStorage().getItem(importKey)) {
       const legacy = legacyRecords();
-      if (legacy.length) window.localStorage.setItem("serein.personal.legacy-backup.v1", JSON.stringify(legacy));
+      if (legacy.length) roomLocalStorage().setItem("serein.personal.legacy-backup.v1", JSON.stringify(legacy));
       for (let start = 0; start < legacy.length; start += 200) {
         await request("/import", { records: legacy.slice(start, start + 200) });
       }
-      window.localStorage.setItem(importKey, "1");
+      roomLocalStorage().setItem(importKey, "1");
     }
     await Promise.all(["favorite", "annotation", "recall_review", "recall_simulation"].map(loadPersonalScope));
-    window.localStorage.setItem(reviewKey, JSON.stringify(Object.fromEntries(personalRows("recall_review").map(r => [r.key, r.value]))));
-    window.localStorage.setItem(simulationKey, JSON.stringify({ schemaVersion: 3, labels: personalRows("recall_simulation").map(r => r.value) }));
-    window.localStorage.removeItem("serein.memory.live-cache-at.v1");
+    roomLocalStorage().setItem(reviewKey, JSON.stringify(Object.fromEntries(personalRows("recall_review").map(r => [r.key, r.value]))));
+    roomLocalStorage().setItem(simulationKey, JSON.stringify({ schemaVersion: 3, labels: personalRows("recall_simulation").map(r => r.value) }));
+    roomLocalStorage().removeItem("serein.memory.live-cache-at.v1");
   })().catch(error => { ready = undefined; throw error; });
   return ready;
 }
@@ -77,6 +78,6 @@ export async function savePersonal(scope, key, value, documentId = null, deleted
   const row = await request("", { scope, key, value, document_id: documentId,
     expected_revision: previous?.revision || 0, deleted });
   records.set(`${scope}:${key}`, row);
-  window.localStorage.removeItem("serein.memory.live-cache-at.v1");
+  roomLocalStorage().removeItem("serein.memory.live-cache-at.v1");
   return row;
 }
