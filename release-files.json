@@ -629,5 +629,8 @@
   "src/serein/room_manager.py",
   "src/serein/room_docker.py",
   "src/serein/room_gateway.py",
-  "docs/ROOMS_M2.md"
+  "docs/ROOMS_M2.md",
+  "src/serein/room_admin.py",
+  "src/serein/rooms_ui.html",
+  "src/serein/rooms_ui.js"
 ]
