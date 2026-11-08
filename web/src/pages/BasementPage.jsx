@@ -1,3 +1,4 @@
+import { roomLocalStorage } from "../storage/roomScopedStorage.js";
 import { identityName, instanceSettings } from "../storage/instanceStore.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -144,7 +145,7 @@ function openSceneInMemory(item) {
   if (item.source_kind === "event" || String(item.id || "").startsWith("event:")) return;
   const sceneId = item.bucket_id || item.moment_id || String(item.id || "").replace(/^scene:/, "").split("#").pop();
   if (!sceneId) return;
-  window.localStorage.setItem("serein.memory.open-source-id", sceneId);
+  roomLocalStorage().setItem("serein.memory.open-source-id", sceneId);
   window.location.hash = "#memory";
   window.dispatchEvent(new CustomEvent("serein:open-memory-scene", { detail: { sourceId: sceneId } }));
 }
