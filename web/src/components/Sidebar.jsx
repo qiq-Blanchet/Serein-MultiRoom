@@ -11,6 +11,7 @@ import {
   Browsers,
   CheckSquare,
 } from "@phosphor-icons/react";
+import { RoomSwitcher } from "./RoomSwitcher.jsx";
 
 function ThoughtCloud({ size = 20, weight, ...props }) {
   return (
@@ -38,7 +39,7 @@ const navItems = [
   { label: "地下室", icon: SlidersHorizontal },
 ];
 
-export function Sidebar({ activeArea, onNavigate, onOpenSettings }) {
+export function Sidebar({ activeArea, onNavigate, onOpenSettings, roomSwitcher = null }) {
   return (
     <aside className="sidebar" aria-label="主要导航">
       <div className="sidebar__brand" aria-label="Serein">
@@ -64,6 +65,7 @@ export function Sidebar({ activeArea, onNavigate, onOpenSettings }) {
         })}
       </nav>
       <div className="sidebar__footer">
+        {roomSwitcher && <RoomSwitcher {...roomSwitcher} />}
         <button className={`nav-item${activeArea === "使用说明" ? " is-active" : ""}`} type="button"
           aria-label="使用说明" aria-current={activeArea === "使用说明" ? "page" : undefined} onClick={() => onNavigate("使用说明")}>
           <Question size={20} weight="light" aria-hidden="true" /><span>使用说明</span>
