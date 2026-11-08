@@ -1,8 +1,9 @@
+import { roomLocalStorage } from "./roomScopedStorage.js";
 import { compositionPresets, defaultCompositionItems } from "../data/awake.js";
 
 export function readLocalPreference(key, fallback) {
   try {
-    const saved = window.localStorage.getItem(key);
+    const saved = roomLocalStorage().getItem(key);
     return saved === null ? fallback : saved;
   } catch {
     return fallback;
@@ -12,7 +13,7 @@ export function readLocalPreference(key, fallback) {
 export function storeLocalPreference(key, value) {
   try {
     const serializedValue = String(value);
-    window.localStorage.setItem(key, serializedValue);
+    roomLocalStorage().setItem(key, serializedValue);
     window.dispatchEvent(new CustomEvent("serein:preference-change", {
       detail: { key, value: serializedValue },
     }));
@@ -23,7 +24,7 @@ export function storeLocalPreference(key, value) {
 
 export function readCompositionItems() {
   try {
-    const saved = window.localStorage.getItem("serein.awake.composition.items");
+    const saved = roomLocalStorage().getItem("serein.awake.composition.items");
     if (!saved) return defaultCompositionItems;
     const parsed = JSON.parse(saved);
     return Array.isArray(parsed) && parsed.every((item) => (
@@ -41,7 +42,7 @@ export function readCompositionItems() {
 
 export function storeCompositionItems(items) {
   try {
-    window.localStorage.setItem("serein.awake.composition.items", JSON.stringify(items));
+    roomLocalStorage().setItem("serein.awake.composition.items", JSON.stringify(items));
   } catch {
     // A future Settings store can own this key when browser storage is unavailable.
   }
