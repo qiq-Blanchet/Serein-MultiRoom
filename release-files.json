@@ -640,5 +640,6 @@
   "web/src/components/RoomSwitcher.jsx",
   "web/src/storage/roomScopedStorage.js",
   "web/tests/room-session.test.mjs",
-  "web/tests/room-dashboard-routes.test.mjs"
+  "web/tests/room-dashboard-routes.test.mjs",
+  "docs/ROOMS_M3_PHASE2.md"
 ]
