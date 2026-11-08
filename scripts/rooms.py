@@ -49,6 +49,10 @@ def parser_for_rooms():
     gateway.add_argument("--port", type=int, default=18219)
     commands.add_parser("gateway-stop")
     commands.add_parser("gateway-status")
+    commands.add_parser("admin-init", help="Generate an independent private administrator key")
+    admin = commands.add_parser("admin-serve",
+                                help="Start the administrator dashboard on loopback only")
+    admin.add_argument("--port", type=int, default=18220)
     return parser
 
 
@@ -81,6 +85,20 @@ def main(argv=None):
     elif args.command == "gateway-status":
         manager.initialize()
         result = runtime.gateway_status(manager)
+    elif args.command == "admin-init":
+        from serein.room_admin import initialize_admin_key
+        secret = initialize_admin_key(manager)
+        result = {"admin_key_file": str(secret),
+                  "message": "Keep private; the administrator key is never a room Gateway Key"}
+    elif args.command == "admin-serve":
+        from serein.room_admin import create_app, read_admin_key
+        if not 1 <= args.port <= 65535:
+            raise RoomError("Invalid administrator UI port")
+        token = read_admin_key(manager)
+        import uvicorn
+        uvicorn.run(create_app(manager, admin_key=token, runtime=runtime),
+                    host="127.0.0.1", port=args.port, access_log=False)
+        return 0
     elif args.command == "show":
         result = manager.get(args.room_id)
     elif args.command == "status":
