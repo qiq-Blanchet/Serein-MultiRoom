@@ -15,6 +15,76 @@ from .timeout_diagnostics import annotate_timeout
 
 logger = logging.getLogger(__name__)
 
+ASSUMED_ANTHROPIC_MAX_TOKENS = 16384
+
+
+def anthropic_thinking_default(model, payload):
+    """Enable bounded thinking by default without overriding an explicit choice."""
+    if (model.get('protocol') != 'anthropic' or 'thinking' in payload
+            or payload.get('_serein_skip_auto_thinking')):
+        return payload
+    try:
+        limit = int(payload.get('max_tokens') or ASSUMED_ANTHROPIC_MAX_TOKENS)
+    except (TypeError, ValueError):
+        return payload
+    # Anthropic requires budget_tokens strictly smaller than max_tokens.
+    if limit <= 1024:
+        return payload
+    result = dict(payload)
+    result['thinking'] = {'type': 'enabled', 'budget_tokens': max(1024, min(4096, limit - 1024))}
+    result.pop('temperature', None)
+    result.pop('top_p', None)
+    return result
+
+
+def relax_plan(model, payload):
+    """Bounded 400-only fallback for automatically added thinking.
+
+    Do not rewrite explicitly requested thinking or increase max_tokens.
+    """
+    if (model.get('protocol') != 'anthropic' or 'thinking' in payload
+            or payload.get('_serein_skip_auto_thinking')):
+        return []
+    try:
+        limit = int(payload.get('max_tokens') or payload.get('max_completion_tokens')
+                    or ASSUMED_ANTHROPIC_MAX_TOKENS)
+    except (TypeError, ValueError):
+        return []
+    if limit <= 1024:
+        return []
+    bare = {**payload, '_serein_skip_auto_thinking': True}
+    attempts = [bare]
+    for maximum in (8192, 4096):
+        if limit > maximum:
+            attempts.append({**bare, 'max_tokens': maximum})
+    return attempts
+
+
+def normalize_anthropic_usage(usage):
+    """Normalize Anthropic usage without losing or double-counting cache tokens."""
+    usage = usage if isinstance(usage, dict) else {}
+    def token(key):
+        value = usage.get(key, 0)
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0
+    uncached = token('input_tokens')
+    created = token('cache_creation_input_tokens')
+    cached = token('cache_read_input_tokens')
+    output = token('output_tokens')
+    prompt = uncached + created + cached
+    return {
+        'prompt_tokens': prompt,
+        'completion_tokens': output,
+        'total_tokens': prompt + output,
+        'prompt_tokens_details': {'cached_tokens': cached},
+        'cache_read_input_tokens': cached,
+        'cache_creation_input_tokens': created,
+    }
+
+
+
 
 class UpstreamError(ValueError):
     def __init__(self, response):
@@ -101,6 +171,11 @@ def request_for(model, payload, *, window_id=''):
         if isinstance(payload.get('thinking'), dict):
             payload['_serein_anthropic_thinking'] = payload['thinking']
         converted = adapter._anthropic_payload_for_upstream(payload, {'upstream': model, 'upstream_model': model['model']})
+        if 'thinking' not in payload and not payload.get('_serein_skip_auto_thinking'):
+            converted = anthropic_thinking_default(model, converted)
+        if isinstance(converted.get('thinking'), dict) and converted['thinking'].get('type') == 'enabled':
+            converted.pop('temperature', None)
+            converted.pop('top_p', None)
         if isinstance(payload.get('reasoning'), dict) and (
                 'deepseek' in str(model.get('base_url') or '').lower()
                 or 'deepseek' in str(model.get('model') or '').lower()):
@@ -135,13 +210,10 @@ def normalize_response(model, result):
     if message is None:
         raise ValueError('Upstream returned no assistant message')
     reason = {'end_turn':'stop', 'stop_sequence':'stop', 'tool_use':'tool_calls', 'max_tokens':'length'}.get(result.get('stop_reason'), 'stop')
-    usage = result.get('usage', {})
+    usage = normalize_anthropic_usage(result.get('usage'))
     return {'id':result.get('id',''), 'object':'chat.completion', 'created':int(time.time()), 'model':model['model'],
             'choices':[{'index':0,'message':message,'finish_reason':reason}],
-            'usage': {'prompt_tokens':usage.get('input_tokens',0), 'completion_tokens':usage.get('output_tokens',0),
-                      'total_tokens':usage.get('input_tokens',0)+usage.get('output_tokens',0),
-                      'cache_read_input_tokens':usage.get('cache_read_input_tokens',0),
-                      'cache_creation_input_tokens':usage.get('cache_creation_input_tokens',0)}}
+            'usage': usage}
 
 
 async def complete(model, payload, *, window_id=''):
@@ -150,18 +222,36 @@ async def complete(model, payload, *, window_id=''):
     started=monotonic()
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-            response = await client.post(url, headers=headers, json=body)
-            if not response.is_success:
-                raise UpstreamError(response)
-            return normalize_response(model, response.json())
+            attempts = [payload, *relax_plan(model, payload)]
+            for index, attempt in enumerate(attempts):
+                url, headers, body = request_for(model, {**attempt, 'stream': False}, window_id=window_id)
+                response = await client.post(url, headers=headers, json=body)
+                if response.is_success:
+                    return normalize_response(model, response.json())
+                if response.status_code != 400 or index == len(attempts) - 1:
+                    raise UpstreamError(response)
     except (httpx.TimeoutException,asyncio.CancelledError) as error:
         annotate_timeout(error,timeout,monotonic()-started)
         raise
 
 
+async def upstream_send_relaxing(client, model, payload, *, window_id=''):
+    """Send an SSE request; retry only auto-thinking HTTP 400 responses."""
+    attempts = [payload, *relax_plan(model, payload)]
+    for index, attempt in enumerate(attempts):
+        url, headers, body = request_for(model, attempt, window_id=window_id)
+        response = await client.send(client.build_request('POST', url, headers=headers, json=body), stream=True)
+        if response.status_code == 400 and index < len(attempts) - 1:
+            await response.aclose()
+            continue
+        return response
+    raise RuntimeError('No upstream request attempted')
+
+
 class AnthropicStream:
     def __init__(self, model):
         self.model=model; self.identifier=''; self.tools={}; self.next_tool=0
+        self.usage={}; self.final_usage=None
 
     def convert(self, event):
         kind=event.get('type'); delta={}; finish=None; usage=None
@@ -169,7 +259,8 @@ class AnthropicStream:
         if kind=='error':
             return {'error': {'message':'Upstream streaming error','type':'upstream_error'}}
         if kind=='message_start':
-            message=event.get('message',{});self.identifier=message.get('id','');delta={'role':'assistant'};usage=message.get('usage')
+            message=event.get('message',{});self.identifier=message.get('id','');delta={'role':'assistant'}
+            if isinstance(message.get('usage'),dict):self.usage.update(message['usage'])
         elif kind=='content_block_start':
             block=event.get('content_block',{});typ=block.get('type')
             if typ=='tool_use':
@@ -179,6 +270,8 @@ class AnthropicStream:
             elif typ in ('thinking','redacted_thinking'):
                 detail=ClientContext._anthropic_thinking_block_to_reasoning_detail(block,index=index)
                 delta={'reasoning_details':[detail]} if detail else {}
+                if typ=='thinking' and block.get('thinking'):
+                    delta['reasoning_content']=block['thinking']
         elif kind=='content_block_delta':
             value=event.get('delta',{});typ=value.get('type')
             if typ=='text_delta':delta={'content':value.get('text','')}
@@ -186,8 +279,12 @@ class AnthropicStream:
             elif typ in ('thinking_delta','signature_delta'):
                 delta={'reasoning_details':[{'type':'reasoning.text','format':'anthropic-claude-v1','index':index,
                     **({'text':value.get('thinking','')} if typ=='thinking_delta' else {'signature':value.get('signature','')})}]}
+                if typ=='thinking_delta':
+                    delta['reasoning_content']=value.get('thinking','')
         elif kind=='message_delta':
-            finish={'tool_use':'tool_calls','max_tokens':'length'}.get(event.get('delta',{}).get('stop_reason'),'stop');usage=event.get('usage')
+            finish={'tool_use':'tool_calls','max_tokens':'length'}.get(event.get('delta',{}).get('stop_reason'),'stop')
+            if isinstance(event.get('usage'),dict):self.usage.update(event['usage'])
+            usage=self.final_usage=normalize_anthropic_usage(self.usage)
         else:return None
         result={'id':self.identifier,'object':'chat.completion.chunk','created':int(time.time()),'model':self.model,
                 'choices':[{'index':0,'delta':delta,'finish_reason':finish}]}
