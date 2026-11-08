@@ -29,7 +29,7 @@ export function currentRoomScope() { return roomId; }
 function scoped(storage) {
   if (!roomId) return storage;
   // Do not migrate old single-room storage into multiple rooms implicitly.
-  const prefix = "serein.multirooom." + roomId + ":";
+  const prefix = "serein.multiroom." + roomId + ":";
   return {
     getItem: (key) => storage.getItem(prefix + key),
     setItem: (key, value) => storage.setItem(prefix + key, value),
