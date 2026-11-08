@@ -1,3 +1,4 @@
+import { roomLocalStorage } from "../storage/roomScopedStorage.js";
 import { EventMailboxSelect } from "../components/EventMailboxSelect.jsx";
 import { identityName, instanceSettings } from "../storage/instanceStore.js";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -110,7 +111,7 @@ function factEventSourceCount(item) {
 
 function readFactEventCache() {
   try {
-    const payload = JSON.parse(window.localStorage.getItem(factEventCacheKey));
+    const payload = JSON.parse(roomLocalStorage().getItem(factEventCacheKey));
     if (!payload || !Array.isArray(payload.fact) || !Array.isArray(payload.event)) return null;
     return {
       cachedAt: Number(payload.cachedAt) || 0,
@@ -126,7 +127,7 @@ function readFactEventCache() {
 
 function storeFactEventCache(items) {
   try {
-    window.localStorage.setItem(factEventCacheKey, JSON.stringify({
+    roomLocalStorage().setItem(factEventCacheKey, JSON.stringify({
       cachedAt: Date.now(),
       fact: items.fact.map(factEventSummary).filter(Boolean),
       event: items.event.map(factEventSummary).filter(Boolean),
@@ -523,7 +524,7 @@ export function MemoryPage() {
   const [sceneActionState, setSceneActionState] = useState("idle");
   const [sceneActionMessage, setSceneActionMessage] = useState("");
   const [pendingSourceSceneId, setPendingSourceSceneId] = useState(() => (
-    window.localStorage.getItem("serein.memory.open-source-id") || ""
+    roomLocalStorage().getItem("serein.memory.open-source-id") || ""
   ));
   const detailRef = useRef(null);
 
@@ -647,7 +648,7 @@ export function MemoryPage() {
     if (!matchingScene) return;
     setSelectedSceneId(matchingScene.id);
     setPendingSourceSceneId("");
-    window.localStorage.removeItem("serein.memory.open-source-id");
+    roomLocalStorage().removeItem("serein.memory.open-source-id");
   }, [pendingSourceSceneId, sceneRecords]);
 
   const filteredScenes = useMemo(() => {
