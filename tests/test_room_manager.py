@@ -33,6 +33,8 @@ def test_room_creation_isolates_paths_keys_and_private_data(tmp_path):
         "features": {"memos": True},
         "identity": {"user_name": "PRIVATE_USER", "ai_name": "PRIVATE_AI"},
         "dream": {"main_prompt": "PRIVATE_DREAM_PROMPT"},
+        "pipeline": {"unknown_personal_prompt": "PRIVATE_PIPELINE_CONTEXT"},
+        "upstream": {"unknown_personal_value": "PRIVATE_PROVIDER_METADATA"},
     })
     second = manager.create("Second")  # Default: configuration from first room
     target_id = second["room"]["room_id"]
@@ -48,6 +50,8 @@ def test_room_creation_isolates_paths_keys_and_private_data(tmp_path):
     assert state["identity"]["ai_name"] == "AI"
     assert not state["dream"]["main_prompt"]
     assert not state["resume"]["selected_ids"]
+    assert "unknown_personal_prompt" not in state["pipeline"]
+    assert "unknown_personal_value" not in state["upstream"]
 
     with sqlite3.connect(target_db) as conn:
         assert not conn.execute(
