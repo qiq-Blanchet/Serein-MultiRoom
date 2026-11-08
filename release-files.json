@@ -621,5 +621,11 @@
   "tests/test_narrative_delete.py",
   "tests/test_narrative_rename.py",
   "web/tests/narrative-errors.test.mjs",
-  "web/tests/narrative-flow.test.mjs"
+  "web/tests/narrative-flow.test.mjs",
+  "docs/MULTI_ROOM_SPEC.md",
+  "docs/ANTHROPIC_THINKING_USAGE.md",
+  "docs/ROOMS_M1.md",
+  "scripts/rooms.py",
+  "src/serein/room_manager.py",
+  "src/serein/room_docker.py"
 ]
