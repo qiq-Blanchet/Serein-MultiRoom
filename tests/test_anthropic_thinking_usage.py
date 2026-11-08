@@ -173,7 +173,7 @@ def test_http_stream_emits_single_final_openai_usage_chunk(deployment, monkeypat
     sent = []
     def handle(request):
         sent.append(json.loads(request.content))
-        event_text = ''.join('data: ' + json.dumps(event) + '\\n\\n' for event in sse_events())
+        event_text = ''.join('data: ' + json.dumps(event) + '\n\n' for event in sse_events())
         return httpx.Response(200, headers={'content-type': 'text/event-stream'}, text=event_text)
 
     monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(
