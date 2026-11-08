@@ -160,6 +160,40 @@ class RoomManager:
     def registry(self) -> Path:
         return self.root / "control" / "rooms.sqlite"
 
+    @property
+    def gateway_routes(self) -> Path:
+        return self.root / "control" / "gateway" / "routes.json"
+
+    def _publish_routes(self) -> None:
+        """Atomically publish ready room routes; never mount room data in gateway."""
+        folder = self.gateway_routes.parent
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with self._connect() as database:
+            rooms = database.execute(
+                "SELECT room_id,gateway_key_sha256 FROM rooms WHERE state='ready' "
+                "ORDER BY room_id"
+            ).fetchall()
+        entries = []
+        for room in rooms:
+            token_file = self.root / "rooms" / room["room_id"] / "secrets" / "api-token"
+            if token_file.is_symlink() or not token_file.is_file():
+                raise RoomError("Ready room has an unsafe or missing internal key")
+            token = token_file.read_text(encoding="utf-8").strip()
+            if len(token) < 32:
+                raise RoomError("Ready room internal key is invalid")
+            entries.append({
+                "room_id": room["room_id"],
+                "gateway_key_sha256": room["gateway_key_sha256"],
+                "internal_token": token,
+            })
+        payload = json.dumps({"version": 1, "rooms": entries}, separators=(",", ":"))
+        temporary = folder / ("." + uuid4().hex + ".tmp")
+        try:
+            _private_text(temporary, payload)
+            os.replace(temporary, self.gateway_routes)
+        finally:
+            temporary.unlink(missing_ok=True)
+
     def initialize(self) -> None:
         if not self.root.exists():
             _private_dir(self.root)
@@ -167,8 +201,12 @@ class RoomManager:
             _private_dir(self.root / "rooms")
         if not (self.root / "control").exists():
             _private_dir(self.root / "control")
+        if not self.gateway_routes.parent.exists():
+            _private_dir(self.gateway_routes.parent)
         with self._connect() as database:
             database.executescript(CONTROL_SCHEMA)
+        if not self.gateway_routes.exists():
+            self._publish_routes()
 
     def _connect(self):
         # The registry contains no memory content, but its path is private.
@@ -212,6 +250,7 @@ class RoomManager:
                 (state, error[:180], room_id),
             )
             database.commit()
+        self._publish_routes()
 
     def create(self, name: str, *, source: str = "first",
                reuse_provider_keys: bool = False) -> dict:
