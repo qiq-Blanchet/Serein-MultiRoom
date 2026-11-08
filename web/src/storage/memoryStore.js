@@ -1,3 +1,4 @@
+import { roomLocalStorage } from "./roomScopedStorage.js";
 import { initializePersonal } from "./personalStore.js";
 const memoryScenesStorageKey = "serein.memory.scene-records.v1";
 const retiredMemorySnapshotStorageKey = "serein.memory.snapshot.v1";
@@ -142,7 +143,7 @@ function mergeLiveMemoryProjection(snapshotScenes, liveProjection, { includeSnap
 
 function readMemorySceneTombstones() {
   try {
-    const saved = JSON.parse(window.localStorage.getItem(memorySceneTombstonesStorageKey));
+    const saved = JSON.parse(roomLocalStorage().getItem(memorySceneTombstonesStorageKey));
     return new Set(
       Array.isArray(saved)
         ? saved.filter((sceneId) => typeof sceneId === "string" && sceneId)
@@ -196,9 +197,9 @@ function normalizeMemoryScene(savedScene, fallbackScene) {
 
 export function readMemoryScenes() {
   try {
-    window.localStorage.removeItem?.(retiredMemorySnapshotStorageKey);
+    roomLocalStorage().removeItem?.(retiredMemorySnapshotStorageKey);
     const tombstonedSceneIds = readMemorySceneTombstones();
-    const saved = JSON.parse(window.localStorage.getItem(memoryScenesStorageKey));
+    const saved = JSON.parse(roomLocalStorage().getItem(memoryScenesStorageKey));
     if (!Array.isArray(saved)) return [];
     return saved
       .filter((scene) => scene?.sourceKind === "serein-live-readonly")
@@ -217,7 +218,7 @@ export function readMemoryScenes() {
 async function loadMemorySnapshotOnce() {
   try { await initializePersonal(); } catch { return null; } // Leave the old browser records intact until import succeeds.
   try {
-    const cachedAt = Number(window.localStorage.getItem(memoryLiveCacheAtStorageKey) || 0);
+    const cachedAt = Number(roomLocalStorage().getItem(memoryLiveCacheAtStorageKey) || 0);
     const cachedScenes = readMemoryScenes();
     if (cachedScenes.length && Date.now() - cachedAt < memoryLiveCacheMaxAgeMs) return cachedScenes;
   } catch {
@@ -246,7 +247,7 @@ async function loadMemorySnapshotOnce() {
   try {
     const snapshotScenes = [];
     const projectedScenes = mergeLiveMemoryProjection(snapshotScenes, liveProjection, { includeSnapshotOnly: false });
-    const saved = JSON.parse(window.localStorage.getItem(memoryScenesStorageKey));
+    const saved = JSON.parse(roomLocalStorage().getItem(memoryScenesStorageKey));
     const savedById = new Map(
       Array.isArray(saved) ? saved.map((scene) => [scene?.id, scene]) : [],
     );
@@ -291,7 +292,7 @@ async function loadMemorySnapshotOnce() {
     if (!scenes.length && liveProjection.scenes.length) return null;
 
     storeMemoryScenes(scenes);
-    window.localStorage.setItem(memoryLiveCacheAtStorageKey, String(Date.now()));
+    roomLocalStorage().setItem(memoryLiveCacheAtStorageKey, String(Date.now()));
     return scenes;
   } catch {
     return null;
@@ -310,7 +311,7 @@ export function loadMemorySnapshot() {
 
 export function storeMemoryScenes(sceneRecords) {
   try {
-    window.localStorage.setItem(memoryScenesStorageKey, JSON.stringify(sceneRecords));
+    roomLocalStorage().setItem(memoryScenesStorageKey, JSON.stringify(sceneRecords));
   } catch {
     // The local prototype remains editable when persistence is unavailable.
   }
@@ -322,7 +323,7 @@ export function tombstoneMemoryScenes(sceneIds) {
     sceneIds.forEach((sceneId) => {
       if (typeof sceneId === "string" && sceneId) tombstonedSceneIds.add(sceneId);
     });
-    window.localStorage.setItem(
+    roomLocalStorage().setItem(
       memorySceneTombstonesStorageKey,
       JSON.stringify([...tombstonedSceneIds]),
     );
