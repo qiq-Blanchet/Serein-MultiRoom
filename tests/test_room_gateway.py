@@ -221,3 +221,44 @@ def test_gateway_container_has_no_private_data_mount_and_is_loopback_only(rooms)
     assert "--read-only" in run and "--cap-drop" in run
     runtime.stop_gateway(manager)
     assert runtime.gateway_status(manager)["container"] == "exited"
+
+
+def test_actual_serein_core_models_remain_room_scoped(rooms):
+    """Proxy two real Serein HTTP apps instead of test-only echo handlers."""
+    from serein.api.http import create_app as create_core
+    from serein.config import Settings
+    from serein.deployment import save_settings
+
+    manager, first, second = rooms
+    backends = {}
+    for item, label in ((first, "alpha"), (second, "beta")):
+        room_id = item["room"]["room_id"]
+        db = manager.room_dir(room_id) / "data" / "serein.db"
+        save_settings(db, {"upstreams": [{
+            "name": label, "base_url": "https://synthetic.invalid/v1",
+            "models": [label + "-model"],
+        }]})
+        internal_key = (manager.room_dir(room_id) / "secrets" /
+                        "api-token").read_text(encoding="utf-8").strip()
+        settings = Settings(db, index=manager.room_dir(room_id) / "data" /
+                            "recall-index.sqlite", writable=True, mcp_tools=[])
+        backend = create_core(settings, token=internal_key, live=True)
+        backends["room-" + room_id] = httpx.ASGITransport(app=backend)
+
+    class DispatchToRealCore(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            assert request.url.host in backends
+            return await backends[request.url.host].handle_async_request(request)
+
+        async def aclose(self):
+            for transport in backends.values():
+                await transport.aclose()
+
+    proxy = TestClient(create_app(manager.gateway_routes,
+                                  transport=DispatchToRealCore()))
+    models_a = proxy.get("/v1/models", headers=auth(first["gateway_key"]))
+    models_b = proxy.get("/v1/models", headers=auth(second["gateway_key"]))
+    assert models_a.status_code == models_b.status_code == 200
+    assert [item["id"] for item in models_a.json()["data"]] == ["alpha/alpha-model"]
+    assert [item["id"] for item in models_b.json()["data"]] == ["beta/beta-model"]
+    assert "beta" not in models_a.text and "alpha" not in models_b.text
