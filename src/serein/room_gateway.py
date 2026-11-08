@@ -139,7 +139,7 @@ def create_app(routes_file: Path, *, transport=None) -> FastAPI:
 
         client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10, read=300, write=120, pool=10),
-            follow_redirects=False, transport=transport,
+            follow_redirects=False, trust_env=False, transport=transport,
         )
         try:
             content = request.stream()
