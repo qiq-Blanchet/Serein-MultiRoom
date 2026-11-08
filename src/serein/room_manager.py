@@ -90,8 +90,7 @@ def _safe_clone_settings(source_db: Path, target_db: Path, *, reuse_provider_key
         "id", "upstream_model", "model", "label", "base_url", "api_key",
         "api_key_env", "protocol", "prompt_cache", "prompt_cache_retention",
         "prompt_cache_ttl", "anthropic_version", "anthropic_beta",
-        "request_timeout_seconds", "dimension", "query_instruction",
-        "document_instruction", "tokenizer", "reasoning_content_compat",
+        "request_timeout_seconds", "dimension", "reasoning_content_compat",
     }
 
     def clean_credentials(values):
