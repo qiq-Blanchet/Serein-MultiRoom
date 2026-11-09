@@ -288,12 +288,15 @@ class DockerRuntime:
         from urllib.parse import urlsplit
         if type(port) is not int or not 1 <= port <= 65535:
             raise RoomError("Invalid Dashboard port")
-        if public_origin:
-            origin = urlsplit(public_origin)
-            if (origin.scheme != "https" or not origin.hostname or
-                    origin.username or origin.password or origin.path not in ("", "/")
-                    or origin.query or origin.fragment):
-                raise RoomError("Public Dashboard origin must be an HTTPS origin")
+        if not public_origin:
+            # HTTP is allowed only for the loopback development port.
+            public_origin = f"http://127.0.0.1:{port}"
+        origin = urlsplit(public_origin)
+        local = origin.scheme == "http" and origin.hostname in ("127.0.0.1", "localhost")
+        if (not (origin.scheme == "https" or local) or not origin.hostname
+                or origin.username or origin.password or origin.path not in ("", "/")
+                or origin.query or origin.fragment):
+            raise RoomError("Dashboard origin must be HTTPS or local loopback HTTP")
         manager.initialize()
         self._ensure_network(manager)
         if self._docker("image", "inspect", self.dashboard_image(),
