@@ -4,11 +4,13 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  adminBasicMatches, roomCookie, selectedRoom, readyRooms,
+  roomCookie, selectedRoom, readyRooms,
   effectiveRoom, signedPreviewRoom, verifyPreviewRoom,
 } from '../server/roomSession.mjs';
 import { roomContextPlugin, backendFor } from '../server/roomContext.mjs';
 import { callSereinBackend } from '../server/sereinBackend.mjs';
+import { authenticate } from '../server/webAuth.mjs';
+import { scryptSync, randomBytes } from 'node:crypto';
 import { initializeRoomScope, roomLocalStorage, roomSessionStorage }
   from '../src/storage/roomScopedStorage.js';
 
@@ -21,12 +23,20 @@ const mkRoutes = (filename) => writeFileSync(filename, JSON.stringify({
   ],
 }), {mode:0o600});
 
-test('one administrator Basic identity authenticates all rooms, no room key can authenticate', () => {
-  const header = 'Basic ' + Buffer.from('admin:' + KEY).toString('base64');
-  assert.equal(adminBasicMatches(header, KEY), true);
-  assert.equal(adminBasicMatches('Basic ' + Buffer.from('admin:other').toString('base64'), KEY), false);
-  assert.equal(adminBasicMatches('Bearer synthetic-room-key', KEY), false);
-  assert.equal(adminBasicMatches('Basic ' + Buffer.from('wrong:' + KEY).toString('base64'), KEY), false);
+test('multi-room dashboard supports custom username and password using original Serein scrypt auth', () => {
+  const username = '雪的小花园';
+  const password = 'synthetic-strong-password-for-web';
+  const salt = randomBytes(16);
+  const record = {
+    username, salt:salt.toString('hex'),
+    hash:scryptSync(password,salt,32,{N:16384,r:8,p:1}).toString('hex'),
+  };
+  const valid = 'Basic ' + Buffer.from(username+':'+password).toString('base64');
+  assert.equal(authenticate(valid,record),true);
+  assert.equal(authenticate('Basic '+Buffer.from('admin:'+password).toString('base64'),record),false);
+  assert.equal(authenticate('Basic '+Buffer.from(username+':wrong-password').toString('base64'),record),false);
+  assert.equal(authenticate('Bearer synthetic-room-key',record),false);
+  assert.equal(authenticate('Basic '+Buffer.from(username+':'+KEY).toString('base64'),record),false);
 });
 
 test('HttpOnly signed cookie selects one room, forgery cannot change room', () => {
