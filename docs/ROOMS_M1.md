@@ -11,6 +11,7 @@
 - 使用原版 `bootstrap.initialize` 创建空库、空索引；一个 room 的数据库、索引、内部 token、外部候选 gateway key 和 Docker 容器均独立。
 - 第二间及后续房间默认从第一间配置克隆；可以 `--source ROOM_ID` 或 `--blank`。配置复制遵循白名单，不复制 SQLite 文件。新房间身份、原话、日记、梦境、叙事和私有查询状态全部留空。MCP tools allowlist 可继承显式配置；新空房间默认空列表。
 - 模型供应商密钥默认**不复制**，CLI 只有 `--reuse-provider-keys` 时才复制。Gateway Key 和内部 Serein Token 永远为新房间重新生成。
+- 可以在创建时指定唯一可读房间 ID（例如 `--room-id xiaogi-main`）。该 ID 可在客户端自定义 `X-Serein-Window-ID` 时复用，但 Gateway Key 仍负责房间鉴权。AI 显示名字在原版「设置 → 外观」修改，房间 ID 不是第二套名字设置。
 - 创建完成时状态为 `stopped`，须通过 Docker 启动并通过健康检查后才标记 `ready`；创建失败为 `error`，不会自动被路由。密钥不会在列表、状态输出中显示。
 
 ## 本地 VPS 开发体验（只针对测试环境）
@@ -26,7 +27,7 @@ python3 scripts/rooms.py --root /srv/serein-multiroom-test init
 python3 scripts/rooms.py --root /srv/serein-multiroom-test build
 
 # 首个完全空白的房间
-python3 scripts/rooms.py --root /srv/serein-multiroom-test create "AI-A" --blank
+python3 scripts/rooms.py --root /srv/serein-multiroom-test create "AI-A" --blank --room-id xiaogi-main
 
 # 查看创建结果中的 room_id；不暴露 Key 内容
 python3 scripts/rooms.py --root /srv/serein-multiroom-test list
