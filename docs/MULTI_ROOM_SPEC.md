@@ -303,12 +303,15 @@ runtime/
 - [x] M0 开发分支核心自动化回归通过（离线 CI）；尚未在真实 VPS 测试。
 - [ ] M1 房间管理内核：已完成房间注册、隔离目录、空库初始化、配置白名单克隆、CLI、Docker 容器生命周期与模拟测试；**仍待真实 Docker 双房启动验收**，详见 [ROOMS_M1.md](ROOMS_M1.md)。
 - [ ] M2 鉴权与路由：Chat/MCP 静态 Bearer 分流、安全代理与隔离测试已实现；仍待 VPS 双房实测、密钥轮换及 OAuth（M5）。
-- [ ] M3 网页管理与配置克隆：**首期**独立管理员管理台已实现；**第二阶段**原版 Dashboard 的小房间切换按钮支持网页创建/启动/切房；**第三阶段**增加 Dashboard Docker 镜像构建、私有网桥管理员服务连接、可自选原版网页登录用户名/密码与独立 CLI；已通过离线回归，**仍待真实 VPS 多容器联机、原版所有功能页面端到端测试，以及 MCP 权限编辑**。见 [ROOMS_M3_PHASE1.md](ROOMS_M3_PHASE1.md)、[ROOMS_M3_PHASE2.md](ROOMS_M3_PHASE2.md)、[ROOMS_M3_PHASE3.md](ROOMS_M3_PHASE3.md)。
-- [ ] M4 完整功能与任务隔离。
+- [ ] M3 网页管理与配置克隆：首期独立管理员管理台、第二阶段原版 Dashboard 左侧小房间切换按钮和网页创建/启动/切房、第三阶段隔离 Docker 连接与可自定义网页登录账号均已实现离线版本；**MCP 权限编辑现已进入原版「设置 → 功能」折叠页**，详见 M4；仍待真实 VPS 多容器联机及全部原版页面端到端验收。见 [ROOMS_M3_PHASE1.md](ROOMS_M3_PHASE1.md)、[ROOMS_M3_PHASE2.md](ROOMS_M3_PHASE2.md)、[ROOMS_M3_PHASE3.md](ROOMS_M3_PHASE3.md)。
+- [ ] M4 完整功能与任务隔离：已用两套原版 Serein Application 的合成测试检查独立后台生命周期、独立 SQLite 状态、MCP `tools/list` 和 `tools/call` 权限隔离；已修复新房 MCP 默认空工具清单，并提供逐房间 MCP 权限网页设置（仅重启目标房间）；**真实 Docker 双房自动摘要/梦境/心绪/备忘长时间运行与写入、配置更新端到端验收仍未完成**。见 [ROOMS_M4_PHASE1.md](ROOMS_M4_PHASE1.md)。
 - [ ] M5 OAuth、备份、统一升级。
 - [ ] M6 发布准备。
 
 ### 实施记录（2026-11-09）
+
+- **M4 第一期任务/MCP 隔离已提交**：M1 新房使用原版默认 MCP 工具策略（`mcp.tools` 未设置），仅自定义工具权限时才写工具列表。原版「设置 → 功能」增加可选 MCP 权限折叠区；改动只通过独立管理层更新目标房间的部署配置并重建目标房间容器，不删除记忆数据，也不修改原版 MCP 核心。后台模型任务、requested-work 及原版 MCP `tools/list`/`tools/call` 已通过双房合成验证。详见 [ROOMS_M4_PHASE1.md](ROOMS_M4_PHASE1.md)；尚待实机验证。
+
 
 - **M3 第三阶段隔离部署已提交**：原版 `deploy/Gateway.Dockerfile` 构建一份共享网页镜像，`scripts/rooms.py dashboard-build/start/status/stop` 启动原版网页，多房间控制层由 VPS 宿主机绑定安装专属 RFC1918 Docker bridge IP。原版单房 `deploy/compose.yaml` 不变。新增 `web-auth` 交互命令，可设置中文/任意合规用户名和密码并使用原版 scrypt 格式；Key 仅用于内部管理 API。**仅通过模拟 Docker，仍待实机联机验收**。见 [ROOMS_M3_PHASE3.md](ROOMS_M3_PHASE3.md)。
 - **M3 第二阶段原版侧边栏已提交**：在「使用说明／花园／设置」上方加入一个可选的小房间切换入口，复用同站点管理员鉴权，不要求每次切换重新登录。Dashboard 的原功能模块通过签名 room 上下文按房间桥接；浏览器 local/session storage、花园、叙事预览和路由草稿按房间隔离；`main` 原样保留，单房运行默认不开启多房间模式。**真实生产部署网络/容器集成仍未完成**。见 [ROOMS_M3_PHASE2.md](ROOMS_M3_PHASE2.md)。
