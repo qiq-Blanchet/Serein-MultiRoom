@@ -6,7 +6,6 @@ import { ArrowsLeftRight, CaretUpDown, Plus } from "@phosphor-icons/react";
 export function RoomSwitcher({ rooms, currentRoomId, onSelect, onCreate, onAction }) {
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
   const [roomIdInput, setRoomIdInput] = useState("");
   const [source, setSource] = useState("first");
   const [reuseKeys, setReuseKeys] = useState(false);
@@ -40,7 +39,7 @@ export function RoomSwitcher({ rooms, currentRoomId, onSelect, onCreate, onActio
                   disabled={busy || room.state !== "ready" || room.room_id === currentRoomId}
                   title={room.state === "ready" ? room.name : "请先启动此房间"}
                   onClick={() => invoke(() => onSelect(room.room_id))}>
-                  {room.room_id === currentRoomId ? "✓ " : ""}{room.name}
+                  {room.room_id === currentRoomId ? "✓ " : ""}{room.display_name || room.room_slug || room.name}
                 </button>
                 {room.state === "stopped" && (
                   <button type="button" className="sidebar__room-small" disabled={busy}
@@ -59,19 +58,16 @@ export function RoomSwitcher({ rooms, currentRoomId, onSelect, onCreate, onActio
               event.preventDefault();
               invoke(async () => {
                 const result = await onCreate({
-                  name: name.trim(), room_slug: roomIdInput.trim(), source,
+                  room_slug: roomIdInput.trim(), source,
                   reuse_provider_keys: reuseKeys,
                 });
                 setKey(result.gateway_key || "");
-                setName("");
                 setRoomIdInput("");
                 setSource("first");
                 setReuseKeys(false);
                 setAdding(false);
               });
             }}>
-              <input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)}
-                placeholder="房间名称" aria-label="房间名称" />
               <input required minLength={3} maxLength={48}
                 pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*"
                 value={roomIdInput} onChange={(event) => setRoomIdInput(event.target.value)}
@@ -85,7 +81,7 @@ export function RoomSwitcher({ rooms, currentRoomId, onSelect, onCreate, onActio
                 <input type="checkbox" checked={reuseKeys}
                   onChange={(event) => setReuseKeys(event.target.checked)}/> 复用模型密钥
               </label>
-              <button type="submit" disabled={busy || !name.trim() || !roomIdInput.trim()}>创建</button>
+              <button type="submit" disabled={busy || !roomIdInput.trim()}>创建</button>
             </form>
           )}
           {key && (
@@ -101,10 +97,10 @@ export function RoomSwitcher({ rooms, currentRoomId, onSelect, onCreate, onActio
       )}
       <button className="nav-item sidebar__room-trigger" type="button"
         aria-label="切换 AI 房间" aria-expanded={open}
-        title={"当前房间：" + (current?.name || "未选择")}
+        title={"当前房间：" + (current?.display_name || current?.room_slug || current?.name || "未选择")}
         onClick={() => open ? close() : setOpen(true)}>
         <ArrowsLeftRight size={20} weight="light" aria-hidden="true"/>
-        <span>{current?.name || "切换房间"} <CaretUpDown size={13} aria-hidden="true"/></span>
+        <span>{current?.display_name || current?.room_slug || current?.name || "切换房间"} <CaretUpDown size={13} aria-hidden="true"/></span>
       </button>
     </div>
   );
