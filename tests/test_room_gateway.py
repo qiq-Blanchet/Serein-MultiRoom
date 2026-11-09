@@ -267,8 +267,8 @@ def test_actual_serein_core_models_remain_room_scoped(rooms):
     assert "beta" not in models_a.text and "alpha" not in models_b.text
 
 
-def test_custom_window_id_can_match_room_id_without_becoming_authentication(tmp_path):
-    """Same text may be used for Room ID and Window ID; Key selects room."""
+def test_chat_window_id_is_flexible_and_chat_mcp_share_room_key(tmp_path):
+    """Window ID is not a room credential; Chat and MCP share the room's key."""
     manager = RoomManager(tmp_path / "rooms")
     a = manager.create("A", room_slug="xiaogi-main", source="blank")
     b = manager.create("B", room_slug="other-main", source="blank")
@@ -293,14 +293,26 @@ def test_custom_window_id_can_match_room_id_without_becoming_authentication(tmp_
                  "X-Serein-Room-ID": "other-main"},
         json={"messages":[{"role":"user","content":"synthetic"}]})
     assert denied.status_code == 403
-    # A's key + B's window header alone is also forbidden, even when
-    # X-Serein-Room-ID is omitted: no silent acceptance in A's room.
-    denied_window_only = client.post("/v1/chat/completions",
+    # Window ID is only a *local window label*: it must not be usable as
+    # room authentication or routing. Even a confusing value still routes
+    # only to the room chosen by A's key, and it is left unchanged.
+    flexible_window = client.post("/v1/chat/completions",
         headers={**auth(a["gateway_key"]), "X-Serein-Window-ID": "other-main"},
         json={"messages":[{"role":"user","content":"synthetic"}]})
-    assert denied_window_only.status_code == 403
+    assert flexible_window.status_code == 200
+    assert flexible_window.json()["room"] == a["room"]["room_id"]
+    assert calls[-1][3]["x-serein-window-id"] == "other-main"
+
+    # One room's external key also authenticates its MCP endpoint.
+    mcp = client.post("/serein/mcp",
+        headers=auth(a["gateway_key"]),
+        json={"jsonrpc":"2.0","method":"tools/list","id":1})
+    assert mcp.status_code == 200
+    assert calls[-1][0] == a["room"]["room_id"]
+    assert calls[-1][1] == "/serein/mcp"
+
     denied = client.post("/v1/chat/completions",
         headers={"X-Serein-Window-ID":"other-main"},
         json={"messages":[{"role":"user","content":"synthetic"}]})
     assert denied.status_code == 401
-    assert len(calls) == 2
+    assert len(calls) == 4
