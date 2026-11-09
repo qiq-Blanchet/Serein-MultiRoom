@@ -262,3 +262,36 @@ def test_actual_serein_core_models_remain_room_scoped(rooms):
     assert [item["id"] for item in models_a.json()["data"]] == ["alpha/alpha-model"]
     assert [item["id"] for item in models_b.json()["data"]] == ["beta/beta-model"]
     assert "beta" not in models_a.text and "alpha" not in models_b.text
+
+
+def test_custom_window_id_can_match_room_id_without_becoming_authentication(tmp_path):
+    """Same text may be used for Room ID and Window ID; Key selects room."""
+    manager = RoomManager(tmp_path / "rooms")
+    a = manager.create("A", room_slug="xiaogi-main", source="blank")
+    b = manager.create("B", room_slug="other-main", source="blank")
+    manager._set_state(a["room"]["room_id"], "ready")
+    manager._set_state(b["room"]["room_id"], "ready")
+    calls = []
+    client = TestClient(create_app(manager.gateway_routes,
+                                   transport=fake_transport(manager, calls)))
+    for item, window in ((a, "xiaogi-main"), (b, "other-main")):
+        response = client.post("/v1/chat/completions", headers={
+            **auth(item["gateway_key"]),
+            "X-Serein-Window-ID": window,
+            "X-Serein-Room-ID": window,
+        }, json={"messages":[{"role":"user","content":"synthetic"}]})
+        assert response.status_code == 200, response.text
+        assert response.json()["room"] == item["room"]["room_id"]
+        assert calls[-1][3]["x-serein-window-id"] == window
+
+    # Neither the room ID nor the window ID is a credential.
+    denied = client.post("/v1/chat/completions",
+        headers={**auth(a["gateway_key"]), "X-Serein-Window-ID": "other-main",
+                 "X-Serein-Room-ID": "other-main"},
+        json={"messages":[{"role":"user","content":"synthetic"}]})
+    assert denied.status_code == 403
+    denied = client.post("/v1/chat/completions",
+        headers={"X-Serein-Window-ID":"other-main"},
+        json={"messages":[{"role":"user","content":"synthetic"}]})
+    assert denied.status_code == 401
+    assert len(calls) == 2
