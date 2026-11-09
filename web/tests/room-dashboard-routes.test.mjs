@@ -95,10 +95,12 @@ test('room creation and start use same admin credential without another login', 
   };
   try {
     let res=capture();
-    await dashboardRoomEndpoint(req('POST',{name:'Second',source:'first',
+    await dashboardRoomEndpoint(req('POST',{room_slug:'xiaogi-main',source:'first',
       reuse_provider_keys:false}),res,{...options(path,mocked),path:'/__serein/rooms'});
     assert.equal(res.statusCode,201);
     assert.equal(JSON.parse(res.body).gateway_key,'ROOM_B_KEY');
+    assert.equal(JSON.parse(sent[0].body).room_slug,'xiaogi-main');
+    assert.equal(JSON.parse(sent[0].body).name,'xiaogi-main');
     res=capture();
     await dashboardRoomEndpoint(req('POST',{}),res,{
       ...options(path,mocked),path:'/__serein/rooms/'+B+'/start',
