@@ -428,20 +428,20 @@ class RoomManager:
             stripped = line.strip()
             if stripped.startswith("[") and stripped.endswith("]"):
                 if in_mcp and not found_tools and tools is not None:
-                    out.append("tools = " + json.dumps(sorted(set(tools))) + "\\n")
+                    out.append("tools = " + json.dumps(sorted(set(tools))) + "\n")
                     found_tools = True
                 in_mcp = stripped == "[mcp]"
                 found_mcp = found_mcp or in_mcp
             if in_mcp and stripped.startswith("tools") and stripped.partition("=")[0].strip() == "tools":
                 if tools is not None:
-                    out.append("tools = " + json.dumps(sorted(set(tools))) + "\\n")
+                    out.append("tools = " + json.dumps(sorted(set(tools))) + "\n")
                     found_tools = True
                 continue
             out.append(line)
         if tools is not None and not found_tools:
             if not found_mcp:
-                out.append("\\n[mcp]\\n")
-            out.append("tools = " + json.dumps(sorted(set(tools))) + "\\n")
+                out.append("\n[mcp]\n")
+            out.append("tools = " + json.dumps(sorted(set(tools))) + "\n")
         updated = "".join(out)
         tomllib.loads(updated)  # Never persist invalid syntax
         temp = path.parent / ("." + uuid4().hex + ".tmp")
