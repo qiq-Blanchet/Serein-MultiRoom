@@ -65,7 +65,13 @@ def _verified_route(path: Path, key: str):
                     or any(char not in "0123456789abcdef" for char in room_id)
                     or not isinstance(token, str) or len(token) < 32):
                 return None
-            return {"room_id": room_id, "internal_token": token}
+            slug = row.get("room_slug")
+            if slug is not None and (not isinstance(slug, str) or
+                    not 3 <= len(slug) <= 48 or
+                    not slug[0].isalpha() or
+                    not all(char in "abcdefghijklmnopqrstuvwxyz0123456789-" for char in slug)):
+                return None
+            return {"room_id": room_id, "room_slug": slug, "internal_token": token}
     except (OSError, ValueError, TypeError):
         return None
     return None
@@ -105,7 +111,8 @@ def create_app(routes_file: Path, *, transport=None) -> FastAPI:
         if not route:
             return _json_error(401, "Invalid room key or inactive room")
         requested_room = request.headers.get("x-serein-room-id")
-        if requested_room and requested_room != route["room_id"]:
+        accepted_ids = {route["room_id"], route.get("room_slug")}
+        if requested_room and requested_room not in accepted_ids:
             return _json_error(403, "Room identity mismatch")
 
         # MCP browser callers require same-origin. OAuth is NOT transparently
@@ -161,7 +168,7 @@ def create_app(routes_file: Path, *, transport=None) -> FastAPI:
                     opts = body.get("serein")
                     if isinstance(opts, dict):
                         hints.append(opts.get("room_id"))
-                    if any(hint is not None and hint != route["room_id"]
+                    if any(hint is not None and hint not in accepted_ids
                            for hint in hints):
                         await client.aclose()
                         return _json_error(403, "Room identity mismatch")
