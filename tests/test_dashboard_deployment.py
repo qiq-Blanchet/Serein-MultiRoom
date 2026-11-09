@@ -112,7 +112,10 @@ def test_original_dashboard_container_uses_internal_routes_not_room_db_mounts(tm
     assert "SEREIN_MULTIROOM_ROUTES_FILE=/control/gateway/routes.json" in envs
     assert all("dst=/control/" in value and "readonly" in value for value in mounts)
     assert len(mounts) == 2
-    assert not any("dst=/data" in value or "rooms/" in value for value in mounts)
+    assert not any("dst=/data" in value or "dst=/secrets" in value
+                   or "dst=/backups" in value for value in mounts)
+    assert all(str(manager.root / "rooms" / room["room_id"]) not in mount
+               for room in manager.list_rooms() for mount in mounts)
     assert "--read-only" in dashboard_cmd and "--cap-drop" in dashboard_cmd
     runtime.stop_dashboard(manager)
     assert runtime.dashboard_status(manager)["container"] == "exited"
