@@ -29,7 +29,7 @@
 
 多房间模式下，Serein Web Gateway **继续使用原版的 `webAuth.mjs` 登录方式**：HTTP Basic 用户名与密码可由用户自行设置（`scripts/rooms.py web-auth`），凭据按原版 scrypt 格式存入 `control/secrets/web-auth.json`，而不是固定用户名 `admin`，更不是把内部管理员 Key 当成网页登录密码。由 HTTPS 反向代理加密传输；浏览器在同一站点完成一次验证，切换房间时不再要求重新输入。**独立管理员 Key 只用于受信任服务之间的管理 API 调用**，浏览器永远不接收它。
 
-房间选择由服务端签名后存放在 `HttpOnly; SameSite=Strict` cookie 中，并不是外部 Gateway Key，不能单独用 cookie 获得管理员权限。实际路由是通过已经由服务端验证的 ready 房间清单和内部 Serein token 完成；没有通过校验时**绝不回退到原版第一间 memory 库**。客户端可以把 **`X-Serein-Window-ID: xiaogi-main`** 与创建时填写的房间 ID 设为同一个值，方便辨认；但该请求头仍只是在**已经用 Gateway Key 鉴权选定的房间内**标识聊天窗口，不会凭它切到其他房间。
+房间选择由服务端签名后存放在 `HttpOnly; SameSite=Strict` cookie 中，并不是外部 Gateway Key，不能单独用 cookie 获得管理员权限。实际路由是通过已经由服务端验证的 ready 房间清单和内部 Serein token 完成；没有通过校验时**绝不回退到原版第一间 memory 库**。**一 AI 一房间 ID 一 Gateway Key**：创建小玑房间时填 `xiaogi-main`，其 Operit 自定义请求就使用 `X-Serein-Window-ID: xiaogi-main` 和小玑自己的 Gateway Key。另一 AI 必须使用自己的不同房间 ID/请求头/Key。网关先验证 Key，再核对请求头；不匹配直接拒绝 403，不能串用。为兼容原版，未传 Window ID 的旧客户端仍可仅凭自己的 Key 访问自己的房间。
 
 多房间公网管理入口必须使用有效的 HTTPS origin。MCP OAuth 仍按 M2 设计保持关闭，M5 将单独设计 audience/resource 的房间绑定。
 
