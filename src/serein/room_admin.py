@@ -27,6 +27,10 @@ from .room_manager import RoomError, RoomManager, _private_dir, _secret_file
 class CreateRoom(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     name: str = Field(min_length=1, max_length=80)
+    # The user-chosen room ID (xiaogi-main), separate from the internal UUID.
+    # Optional for old automation/API clients; both Dashboard forms require it.
+    room_slug: str | None = Field(default=None, min_length=3, max_length=48,
+                                   pattern=r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
     source: str = Field(default="first", min_length=1, max_length=40)
     reuse_provider_keys: bool = False
 
@@ -172,7 +176,7 @@ def create_app(manager: RoomManager, *, admin_key: str,
     def create_room(body: CreateRoom):
         try:
             created = manager.create(
-                body.name, source=body.source,
+                body.name, source=body.source, room_slug=body.room_slug,
                 reuse_provider_keys=body.reuse_provider_keys,
             )
         except (RoomError, ValueError):
