@@ -6,7 +6,7 @@
 
 - 原版 Serein Dashboard 的左侧导航在「使用说明／花园／设置」上方增加**一个小房间切换按钮**，间距、字体、颜色沿用原版，不另设复杂大屏。点击后才展开房间列表和新建房间小表单。
 - 浏览器进入统一管理网站只使用**同一个管理员身份**进行一次 HTTPS 鉴权。之后切换 AI 房间不再重复输入密码。管理员凭据与每房间给 Operit/MCP 的 Gateway Key 完全不同。
-- 新房间可从 Dashboard 创建、复制首房/指定房间的功能配置或空白初始化，并可在菜单中启动。创建房间不需要每次 SSH 到 VPS；首次安装、Docker 镜像构建与版本升级仍是运维工作。
+- 新房间可从 Dashboard 创建、复制首房/指定房间的功能配置或空白初始化，并可在菜单中启动。**创建时只填一个房间 ID**（如 `xiaogi-main`），不额外要求房间名称。AI 对外显示名称继续使用原版「设置 → 外观」里的 `ai_name`；创建后立即返回随机 Gateway Key。创建房间不需要每次 SSH 到 VPS；首次安装、Docker 镜像构建与版本升级仍是运维工作。
 - 必须完整保留每个房间原版的设置编辑、模型、自动摘要和各记忆功能；客户端的房间 ID、窗口 ID、模型名都不能绕过服务端验证的房间身份。
 - **私人数据永不互相复制**：Scene、Event、原话、日记、梦境、心绪、备忘、暗房、窗影、模型私人提示、历史任务状态、索引和备份。复制的是配置白名单，不复制私人内容。
 
@@ -29,7 +29,7 @@
 
 多房间模式下，Serein Web Gateway **继续使用原版的 `webAuth.mjs` 登录方式**：HTTP Basic 用户名与密码可由用户自行设置（`scripts/rooms.py web-auth`），凭据按原版 scrypt 格式存入 `control/secrets/web-auth.json`，而不是固定用户名 `admin`，更不是把内部管理员 Key 当成网页登录密码。由 HTTPS 反向代理加密传输；浏览器在同一站点完成一次验证，切换房间时不再要求重新输入。**独立管理员 Key 只用于受信任服务之间的管理 API 调用**，浏览器永远不接收它。
 
-房间选择由服务端签名后存放在 `HttpOnly; SameSite=Strict` cookie 中，并不是外部 Gateway Key，不能单独用 cookie 获得管理员权限。实际路由是通过已经由服务端验证的 ready 房间清单和内部 Serein token 完成；没有通过校验时**绝不回退到原版第一间 memory 库**。可选 `X-Serein-Window-ID` 始终只是当前房间内的窗口标识。
+房间选择由服务端签名后存放在 `HttpOnly; SameSite=Strict` cookie 中，并不是外部 Gateway Key，不能单独用 cookie 获得管理员权限。实际路由是通过已经由服务端验证的 ready 房间清单和内部 Serein token 完成；没有通过校验时**绝不回退到原版第一间 memory 库**。客户端可以把 **`X-Serein-Window-ID: xiaogi-main`** 与创建时填写的房间 ID 设为同一个值，方便辨认；但该请求头仍只是在**已经用 Gateway Key 鉴权选定的房间内**标识聊天窗口，不会凭它切到其他房间。
 
 多房间公网管理入口必须使用有效的 HTTPS origin。MCP OAuth 仍按 M2 设计保持关闭，M5 将单独设计 audience/resource 的房间绑定。
 
