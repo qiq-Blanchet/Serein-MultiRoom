@@ -118,3 +118,52 @@ def test_per_room_background_lifespans_are_distinct_and_cancel_independently(
             "SELECT 1 FROM background_state WHERE name=?",
             ("memo-for-room-a",),
         ).fetchone() is None
+
+
+def test_dream_mood_memo_and_summary_feature_state_stays_per_room(tmp_path):
+    """Feature switches and generated task state remain in their own stores."""
+    from serein.deployment import read_settings, save_settings
+
+    manager = RoomManager(tmp_path / "rooms")
+    a_id = manager.create("A", source="blank")["room"]["room_id"]
+    b_id = manager.create("B", source="blank")["room"]["room_id"]
+    a_db = manager.room_dir(a_id) / "data" / "serein.db"
+    b_db = manager.room_dir(b_id) / "data" / "serein.db"
+    save_settings(a_db, {
+        "features": {
+            "memos": True, "persona": True,
+            "dream_read": True, "dream_morning": True,
+        },
+        "pipeline": {"auto_enabled": False},
+    })
+    a_settings = read_settings(a_db)
+    b_settings = read_settings(b_db)
+    for feature in ("memos", "persona", "dream_read", "dream_morning"):
+        assert a_settings["features"][feature] is True
+        assert b_settings["features"][feature] is False
+    assert a_settings["pipeline"]["auto_enabled"] is False
+    assert b_settings["pipeline"]["auto_enabled"] is True
+
+    names = ("dream-generated", "mood-generated", "memo-generated",
+             "summary-task-progress")
+    with Store(a_db) as store:
+        for name in names:
+            store.conn.execute(
+                "INSERT INTO background_state(name,value_json) VALUES (?,?)",
+                (name, json.dumps({"content": "PRIVATE_A_" + name})),
+            )
+    with Store(b_db) as store:
+        for name in names:
+            assert store.conn.execute(
+                "SELECT 1 FROM background_state WHERE name=?", (name,)
+            ).fetchone() is None
+        store.conn.execute(
+            "INSERT INTO background_state(name,value_json) VALUES (?,?)",
+            ("memo-generated", json.dumps({"content": "PRIVATE_B"})),
+        )
+    with Store(a_db) as store:
+        value = store.conn.execute(
+            "SELECT value_json FROM background_state WHERE name=?",
+            ("memo-generated",),
+        ).fetchone()[0]
+        assert "PRIVATE_B" not in value and "PRIVATE_A_" in value
