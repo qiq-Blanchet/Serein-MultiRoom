@@ -57,10 +57,12 @@ export async function dashboardRoomEndpoint(req, res, {
     path, publicOrigin, adminKey, routesFile, adminURL, fetchImpl = fetch,
 }) {
   const action = /^\/__serein\/rooms\/([a-f0-9]{32})\/(start|stop)$/.exec(path);
-  if (!action && !['/__serein/rooms', '/__serein/rooms/select', '/__serein/rooms/current'].includes(path)) return false;
+  const mcpTools = /^\/__serein\/rooms\/([a-f0-9]{32})\/mcp-tools$/.exec(path);
+  if (!action && !mcpTools && !['/__serein/rooms', '/__serein/rooms/select', '/__serein/rooms/current'].includes(path)) return false;
   const origin = publicOrigin || new URL('http://' + req.headers.host);
   if (!sameOrigin(req, origin)) { send(res, 403, {detail:'Same-origin request required'}); return true; }
   if ((action || path === '/__serein/rooms/select') && req.method !== 'POST'
+      || mcpTools && !['GET','POST'].includes(req.method)
       || path === '/__serein/rooms/current' && req.method !== 'GET'
       || path === '/__serein/rooms' && !['GET','POST'].includes(req.method)) {
     send(res, 405, {detail:'Method not allowed'});return true;
@@ -83,6 +85,51 @@ export async function dashboardRoomEndpoint(req, res, {
       const room = await response.json();
       send(res,200,{room:fields(room)});
     } catch {send(res,502,{detail:'Room lifecycle administrator unavailable'});}
+    return true;
+  }
+  if (mcpTools) {
+    // The Settings page may only modify the currently authenticated room;
+    // an arbitrary UUID from browser input cannot update another room.
+    if (!selected || mcpTools[1] !== selected.room_id) {
+      send(res, 403, {detail:'Select the room before editing its MCP tools'}); return true;
+    }
+    let body;
+    if (req.method === 'POST') {
+      if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
+        send(res,415,{detail:'JSON required'});return true;
+      }
+      try {body = await readBody(req);} catch {
+        send(res,400,{detail:'Invalid MCP tool selection'});return true;
+      }
+      if (!['original','custom'].includes(body.mode) || !Array.isArray(body.tools)
+          || body.tools.length > 128
+          || body.tools.some(item => typeof item !== 'string' || !item || item.length > 100)
+          || Object.keys(body).some(key => !['mode','tools'].includes(key))) {
+        send(res,400,{detail:'Invalid MCP tool selection'});return true;
+      }
+    }
+    try {
+      const base = new URL(adminURL);
+      if (base.username || base.password || base.pathname !== '/' || base.search || base.hash
+          || base.protocol !== 'http:' ||
+          (!['localhost','127.0.0.1','[::1]','serein-room-admin'].includes(base.hostname)
+            && !privateDockerAdminHost(base.hostname))) throw Error('Private admin URL required');
+      const target = new URL('/api/rooms/' + mcpTools[1] + '/mcp-tools', base);
+      const response = await fetchImpl(target, {
+        method:req.method, redirect:'manual',
+        headers:{'Authorization':'Bearer '+adminKey, 'Content-Type':'application/json'},
+        body:body ? JSON.stringify(body) : undefined,
+        signal:AbortSignal.timeout(90000),
+      });
+      if (!response.ok) {
+        send(res, response.status >= 400 && response.status < 500 ? response.status : 502,
+             {detail:'Unable to read or update MCP tools'});return true;
+      }
+      const data = await response.json();
+      send(res,200,data);
+    } catch {
+      send(res,502,{detail:'Room MCP administrator unavailable'});
+    }
     return true;
   }
   if (path === '/__serein/rooms/select') {
