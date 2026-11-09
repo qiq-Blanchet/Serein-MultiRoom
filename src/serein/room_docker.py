@@ -108,6 +108,19 @@ class DockerRuntime:
             "--host", "0.0.0.0", "--port", "8011",
         )
 
+    def remove_stopped(self, manager, room):
+        """Recreate *only the container*, never room data or bind mounts.
+
+        The original MCP allowlist is loaded at startup, so changes need a
+        fresh container with the revised config.toml bind mount.
+        """
+        existing = self.inspect(manager, room)
+        if not existing:
+            return
+        if (existing.get("State") or {}).get("Running"):
+            raise RoomError("Cannot recreate a running room container")
+        self._docker("container", "rm", self.container_name(manager, room))
+
     def status(self, manager, room):
         found = self.inspect(manager, room)
         if not found:
