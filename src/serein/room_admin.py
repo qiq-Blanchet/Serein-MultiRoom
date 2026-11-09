@@ -7,11 +7,13 @@ It shares the M1 RoomManager business logic with the VPS CLI.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
+import secrets
 import hmac
 import os
 from importlib.resources import files
 from pathlib import Path
-import secrets
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -27,6 +29,39 @@ class CreateRoom(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     source: str = Field(default="first", min_length=1, max_length=40)
     reuse_provider_keys: bool = False
+
+
+def dashboard_credentials_path(manager: RoomManager) -> Path:
+    """Use the original Serein scrypt web-auth.json credential contract."""
+    return manager.root / "control" / "secrets" / "web-auth.json"
+
+
+def save_dashboard_credentials(manager: RoomManager, username: str, password: str) -> Path:
+    """Initial setup or explicit reset; never accept a password via CLI arguments."""
+    if not isinstance(username, str) or not username.strip() or ":" in username or len(username) > 128:
+        raise RoomError("Dashboard username must be 1-128 characters without colon")
+    if not isinstance(password, str) or len(password) < 10:
+        raise RoomError("Dashboard password needs at least 10 characters")
+    manager.initialize()
+    directory = manager.root / "control" / "secrets"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    salt = secrets.token_bytes(16)
+    data = {
+        "username": username,
+        "salt": salt.hex(),
+        "hash": hashlib.scrypt(password.encode("utf-8"), salt=salt,
+                               n=16384, r=8, p=1, dklen=32).hex(),
+    }
+    path = dashboard_credentials_path(manager)
+    if path.is_symlink():
+        raise RoomError("Dashboard credential file cannot be a symbolic link")
+    temp = directory / ("." + secrets.token_hex(16) + ".tmp")
+    try:
+        _secret_file(temp, json.dumps(data, ensure_ascii=False))
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+    return path
 
 
 def admin_key_path(manager: RoomManager) -> Path:
