@@ -46,7 +46,7 @@ function privateDockerAdminHost(hostname) {
 
 function fields(room) {
   return {
-    room_id:room.room_id, name:room.name, state:room.state,
+    room_id:room.room_id, room_slug:room.room_slug, name:room.name, state:room.state,
     created_at:room.created_at, source_room_id:room.source_room_id,
     docker:room.docker && {container:room.docker.container, health:room.docker.health},
   };
@@ -105,9 +105,12 @@ export async function dashboardRoomEndpoint(req, res, {
   if (req.method === 'POST') {
     try {body = await readBody(req);} catch {send(res,400,{detail:'Invalid room creation request'});return true;}
     if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 80
+        || typeof body.room_slug !== 'string'
+        || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(body.room_slug)
+        || body.room_slug.length < 3 || body.room_slug.length > 48
         || !(body.source === undefined || ['first','blank'].includes(body.source) || /^[a-f0-9]{32}$/.test(body.source))
         || (body.reuse_provider_keys !== undefined && typeof body.reuse_provider_keys !== 'boolean')
-        || Object.keys(body).some(k => !['name','source','reuse_provider_keys'].includes(k))) {
+        || Object.keys(body).some(k => !['name','room_slug','source','reuse_provider_keys'].includes(k))) {
       send(res,400,{detail:'Invalid room parameters'});return true;
     }
   }
