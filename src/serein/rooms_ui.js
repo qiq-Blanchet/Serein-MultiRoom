@@ -69,7 +69,7 @@
                          room.state);
       top.append(title, badge);
       article.append(top);
-      article.append(node("code", "muted", room.room_id));
+      article.append(node("code", "muted", room.room_slug || room.room_id));
       const docker = room.docker || {};
       article.append(node("p", "muted", "容器：" + (docker.container || "unknown") +
         " · 健康：" + (docker.health || "unknown")));
@@ -160,12 +160,14 @@
     try {
       const result = await api("/api/rooms", "POST", {
         name: $("room-name").value.trim(),
+        room_slug: $("room-id").value.trim(),
         source: $("room-source").value,
         reuse_provider_keys: $("reuse-provider").checked,
       });
       text("new-room-key", result.gateway_key);
       $("secret-panel").hidden = false;
       $("room-name").value = "";
+      $("room-id").value = "";
       $("reuse-provider").checked = false;
       await refresh();
       message("create-message", "房间已创建（停止状态），请保存 Gateway Key 后启动。");
