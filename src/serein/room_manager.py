@@ -365,6 +365,93 @@ class RoomManager:
             raise
         return {"room": self.get(room_id), "gateway_key": gateway_key}
 
+    def mcp_permissions(self, room_id: str) -> dict:
+        """Read effective room MCP policy and feature-dependent tool catalog.
+
+        None means native Serein defaults, unlike an explicit empty list,
+        which disables all MCP tools. No room memory content is returned.
+        """
+        from .application import Application
+        from .api.mcp import create_server
+        from .config import Settings
+
+        home = self.room_dir(room_id)
+        config = home / "config" / "config.toml"
+        with config.open("rb") as handle:
+            document = tomllib.load(handle)
+        selected = document.get("mcp", {}).get("tools")
+        if selected is not None and (
+                not isinstance(selected, list) or
+                any(not isinstance(tool, str) for tool in selected)):
+            raise RoomError("Invalid MCP tools configuration")
+        settings = Settings(
+            home / "data" / "serein.db",
+            index=home / "data" / "recall-index.sqlite",
+            writable=True, mcp_tools=None,
+        )
+        server = create_server(Application(settings), http=True)
+        available = sorted({tool.name for tool in server._tool_manager.list_tools()})
+        return {
+            "mode": "original" if selected is None else "custom",
+            "tools": sorted(set(selected)) if selected is not None else [],
+            "available": available,
+            "note": "Feature switches still control which MCP tools are active",
+        }
+
+    def set_mcp_permissions(self, room_id: str, tools: list[str] | None) -> dict:
+        """Update the room config while stopped; data and other config survive.
+
+        The caller must restart/recreate the room container to apply the
+        startup-bound original Serein MCP allowlist.
+        """
+        room = self.get(room_id)
+        if room["state"] != "stopped":
+            raise RoomError("Stop the room before updating MCP configuration")
+        if tools is not None:
+            if not isinstance(tools, list) or len(tools) > 128 or any(
+                    not isinstance(t, str) or not t or len(t) > 100 for t in tools):
+                raise RoomError("Invalid MCP tool selection")
+            known = self.mcp_permissions(room_id)
+            if set(tools) - (set(known["available"]) | set(known["tools"])):
+                raise RoomError("Unknown or currently unavailable MCP tool")
+        home = self.room_dir(room_id)
+        path = home / "config" / "config.toml"
+        if path.is_symlink():
+            raise RoomError("Refusing to change a symlinked room config")
+        original = path.read_text(encoding="utf-8")
+        lines = original.splitlines(keepends=True)
+        out = []
+        in_mcp = False
+        found_mcp = False
+        found_tools = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                if in_mcp and not found_tools and tools is not None:
+                    out.append("tools = " + json.dumps(sorted(set(tools))) + "\\n")
+                    found_tools = True
+                in_mcp = stripped == "[mcp]"
+                found_mcp = found_mcp or in_mcp
+            if in_mcp and stripped.startswith("tools") and stripped.partition("=")[0].strip() == "tools":
+                if tools is not None:
+                    out.append("tools = " + json.dumps(sorted(set(tools))) + "\\n")
+                    found_tools = True
+                continue
+            out.append(line)
+        if tools is not None and not found_tools:
+            if not found_mcp:
+                out.append("\\n[mcp]\\n")
+            out.append("tools = " + json.dumps(sorted(set(tools))) + "\\n")
+        updated = "".join(out)
+        tomllib.loads(updated)  # Never persist invalid syntax
+        temp = path.parent / ("." + uuid4().hex + ".tmp")
+        try:
+            _private_text(temp, updated)
+            os.replace(temp, path)
+        finally:
+            temp.unlink(missing_ok=True)
+        return self.mcp_permissions(room_id)
+
     def resolve_gateway_key(self, key: str) -> str | None:
         """For M2: map a verified high-entropy key to one room."""
         if not isinstance(key, str) or not key:
