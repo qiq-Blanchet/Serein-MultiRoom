@@ -212,3 +212,141 @@ class DockerRuntime:
             self._docker("container", "stop", "--time", "15",
                          self.gateway_name(manager))
         return self.gateway_status(manager)
+
+    # M3 Phase 3: one copy of the *original* Node/Vite dashboard image.
+    # This new opt-in service never replaces the legacy deploy/compose.yaml.
+    @staticmethod
+    def dashboard_name(manager):
+        return f"serein-dashboard-{manager.namespace}"
+
+    @staticmethod
+    def dashboard_image():
+        return "serein-multiroom-web:dev"
+
+    def build_dashboard(self, repo_root: Path):
+        root = Path(repo_root).resolve()
+        dockerfile = root / "deploy" / "Gateway.Dockerfile"
+        if not dockerfile.is_file():
+            raise RoomError("Original Gateway.Dockerfile is missing")
+        self._docker("build", "--tag", self.dashboard_image(), "--file",
+                     str(dockerfile), str(root))
+
+    def network_gateway_ip(self, manager) -> str:
+        """Get the Docker bridge address for host-run admin control service.
+
+        The administrator process binds ONLY this private network interface,
+        never 0.0.0.0 or the VPS public address.
+        """
+        import ipaddress
+        self._ensure_network(manager)
+        result = self._docker("network", "inspect", manager.network)
+        try:
+            data = json.loads(result.stdout)[0]
+            candidates = (data.get("IPAM") or {}).get("Config") or []
+            gateway = next((item.get("Gateway") for item in candidates
+                            if item.get("Gateway") and
+                            ":" not in item.get("Gateway")), None)
+            address = ipaddress.ip_address(gateway)
+            if address.version != 4 or not address.is_private:
+                raise ValueError("Not a private IPv4 Docker bridge")
+        except (ValueError, IndexError, TypeError, StopIteration) as exc:
+            raise RoomError("Docker bridge has no safe private IPv4 gateway") from exc
+        return str(address)
+
+    def dashboard_inspect(self, manager):
+        result = self._docker("container", "inspect", self.dashboard_name(manager),
+                              check=False)
+        if result.returncode:
+            return None
+        try:
+            data = json.loads(result.stdout)[0]
+        except (ValueError, IndexError, TypeError) as exc:
+            raise RoomError("Malformed Dashboard inspect response") from exc
+        labels = data.get("Config", {}).get("Labels") or {}
+        if (labels.get("serein.multiroom.dashboard") != "true" or
+                labels.get("serein.multiroom.installation") != manager.namespace):
+            raise RoomError("Dashboard container name belongs to another service")
+        return data
+
+    def dashboard_status(self, manager):
+        result = self.dashboard_inspect(manager)
+        if not result:
+            return {"container": "absent", "health": "unknown"}
+        state = result.get("State") or {}
+        return {
+            "container": state.get("Status", "unknown"),
+            "health": (state.get("Health") or {}).get("Status", "unknown"),
+        }
+
+    def start_dashboard(self, manager, *, port=18217, public_origin=""):
+        """Launch the original Dashboard on private network using one web login.
+
+        The external reverse proxy is operator-managed and must provide HTTPS.
+        Only administrator credentials and the routing manifest are mounted;
+        no individual room's databases, index, diary or backup volumes.
+        """
+        from urllib.parse import urlsplit
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise RoomError("Invalid Dashboard port")
+        if public_origin:
+            origin = urlsplit(public_origin)
+            if (origin.scheme != "https" or not origin.hostname or
+                    origin.username or origin.password or origin.path not in ("", "/")
+                    or origin.query or origin.fragment):
+                raise RoomError("Public Dashboard origin must be an HTTPS origin")
+        manager.initialize()
+        self._ensure_network(manager)
+        if self._docker("image", "inspect", self.dashboard_image(),
+                        check=False).returncode:
+            raise RoomError("Dashboard image not present: run dashboard-build")
+        # Both M2 Chat/MCP gateway and a host admin-serve bridge must be running.
+        gateway = self.gateway_inspect(manager)
+        if not gateway or not (gateway.get("State") or {}).get("Running"):
+            raise RoomError("Start the M2 gateway before the Dashboard")
+        prior = self.dashboard_inspect(manager)
+        if prior:
+            if not (prior.get("State") or {}).get("Running"):
+                self._docker("container", "start", self.dashboard_name(manager))
+            return self.dashboard_status(manager)
+
+        manager_key_dir = manager.root / "control" / "secrets"
+        routes_dir = manager.gateway_routes.parent
+        for target in (manager_key_dir / "admin-key",
+                       manager_key_dir / "web-auth.json",
+                       manager.gateway_routes):
+            if not target.is_file() or target.is_symlink():
+                raise RoomError("Missing or unsafe administrator identity / routes")
+        from .room_admin import read_admin_key
+        read_admin_key(manager)  # Validate owner permissions and length.
+        self._docker(
+            "run", "--detach", "--init", "--name", self.dashboard_name(manager),
+            "--restart", "unless-stopped",
+            "--label", "serein.multiroom.dashboard=true",
+            "--label", "serein.multiroom.installation=" + manager.namespace,
+            "--network", manager.network,
+            "--add-host", "host.docker.internal:host-gateway",
+            "--publish", f"127.0.0.1:{port}:8080",
+            "--memory", "1g", "--cpus", "1.0", "--pids-limit", "256",
+            "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+            "--read-only", "--tmpfs", "/tmp:rw,nosuid,noexec,size=32m",
+            "--mount", f"type=bind,src={routes_dir},dst=/control/gateway,readonly",
+            "--mount", f"type=bind,src={manager_key_dir},dst=/control/secrets,readonly",
+            "--env", "SEREIN_MULTIROOM_ROUTES_FILE=/control/gateway/routes.json",
+            "--env", "SEREIN_MULTIROOM_ADMIN_KEY_FILE=/control/secrets/admin-key",
+            "--env", "SEREIN_WEB_AUTH_FILE=/control/secrets/web-auth.json",
+            "--env", "SEREIN_MULTIROOM_CHAT_URL=http://" +
+                     self.gateway_name(manager) + ":8080",
+            "--env", "SEREIN_MULTIROOM_ADMIN_URL=http://host.docker.internal:18220",
+            "--env", "SEREIN_PUBLIC_ORIGIN=" + public_origin,
+            "--env", "SEREIN_GATEWAY_BIND=0.0.0.0",
+            "--env", "SEREIN_GATEWAY_PORT=8080",
+            self.dashboard_image(),
+        )
+        return self.dashboard_status(manager)
+
+    def stop_dashboard(self, manager):
+        state = self.dashboard_inspect(manager)
+        if state and (state.get("State") or {}).get("Running"):
+            self._docker("container", "stop", "--time", "15",
+                         self.dashboard_name(manager))
+        return self.dashboard_status(manager)
