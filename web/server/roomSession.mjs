@@ -1,20 +1,9 @@
 // Opt-in dashboard selection. A signed room hint is NOT an authentication
-// credential: every browser request still requires the administrator Basic key.
+// credential: every browser request still needs the original configurable web login.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 export const ROOM_COOKIE = 'serein_dashboard_room';
-
-export function adminBasicMatches(header, key) {
-  if (typeof header !== 'string' || !header.startsWith('Basic ') || !key) return false;
-  let raw;
-  try { raw = Buffer.from(header.slice(6), 'base64').toString('utf8'); } catch { return false; }
-  const delimiter = raw.indexOf(':');
-  if (delimiter < 0 || raw.slice(0, delimiter) !== 'admin') return false;
-  const actual = Buffer.from(raw.slice(delimiter + 1));
-  const expected = Buffer.from(key);
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
-}
 
 function signature(key, roomId) {
   return createHmac('sha256', key).update('serein-dashboard-room-v1:' + roomId).digest('base64url');
