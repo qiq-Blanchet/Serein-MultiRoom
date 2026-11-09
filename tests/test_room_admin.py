@@ -36,6 +36,10 @@ class FakeRuntime:
         self.calls.append(("stop", room["room_id"]))
         self.running.discard(room["room_id"])
 
+    def remove_stopped(self, manager, room):
+        assert room["room_id"] not in self.running
+        self.calls.append(("recreate", room["room_id"]))
+
 
 @pytest.fixture
 def console(tmp_path):
@@ -239,3 +243,49 @@ def test_room_id_creation_uses_existing_appearance_ai_name(console):
     })
     assert duplicate.status_code == 400
     assert len(manager.list_rooms()) == 1
+
+
+def test_mcp_permission_editor_is_room_scoped_and_requires_admin(console):
+    client, manager, key, runtime, _ = console
+    a = manager.create("A", source="blank")["room"]["room_id"]
+    b = manager.create("B", source="blank")["room"]["room_id"]
+    path = f"/api/rooms/{a}/mcp-tools"
+    assert client.get(path).status_code == 401
+    assert client.post(path, json={"mode": "custom", "tools": []}).status_code == 401
+    assert client.get(path, headers=auth(key)).json()["mode"] == "original"
+    original_b = client.get(f"/api/rooms/{b}/mcp-tools", headers=auth(key)).json()
+    assert original_b["mode"] == "original"
+    assert "read_memory" in original_b["available"]
+
+    denied = client.post(path, headers=auth(key),
+                         json={"mode": "custom", "tools": ["unknown_tool"]})
+    assert denied.status_code == 409
+    assert not runtime.calls
+    original = client.post(path, headers={**auth(key), "Origin": "https://not-ours.invalid"},
+                           json={"mode": "custom", "tools": ["read_memory"]})
+    assert original.status_code == 403
+
+    # Saving a stopped room must not start it or alter other rooms.
+    result = client.post(path, headers=auth(key),
+                         json={"mode": "custom", "tools": ["read_memory"]})
+    assert result.status_code == 200, result.text
+    assert result.json()["permissions"]["tools"] == ["read_memory"]
+    assert ("recreate", a) in runtime.calls
+    assert manager.get(a)["state"] == "stopped"
+    assert manager.mcp_permissions(b)["mode"] == "original"
+
+    manager.start(a, runtime)
+    result = client.post(path, headers=auth(key),
+                         json={"mode": "custom", "tools": []})
+    assert result.status_code == 200, result.text
+    assert result.json()["restarted"] is True
+    assert manager.get(a)["state"] == "ready"
+    assert manager.get(b)["state"] == "stopped"
+    assert manager.mcp_permissions(a)["tools"] == []
+    assert manager.mcp_permissions(b)["mode"] == "original"
+
+    restored = client.post(path, headers=auth(key),
+                           json={"mode": "original", "tools": []})
+    assert restored.status_code == 200
+    assert manager.mcp_permissions(a)["mode"] == "original"
+    assert manager.mcp_permissions(b)["mode"] == "original"
