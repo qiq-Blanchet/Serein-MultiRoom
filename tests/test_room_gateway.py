@@ -76,8 +76,9 @@ def test_two_keys_route_chat_to_distinct_rooms(rooms):
     for room in (first, second):
         key = room["gateway_key"]
         room_id = room["room"]["room_id"]
+        window_id = room["room"]["room_slug"]
         result = client.post("/v1/chat/completions", headers={
-            **auth(key), "X-Serein-Window-ID": "shared-window",
+            **auth(key), "X-Serein-Window-ID": window_id,
             "X-Forwarded-Host": "evil.example", "X-Real-IP": "evil",
         }, json={
             "model": "a-model",
@@ -87,7 +88,9 @@ def test_two_keys_route_chat_to_distinct_rooms(rooms):
         assert result.status_code == 200, result.text
         assert result.json()["room"] == room_id
     assert calls[0][0] != calls[1][0]
-    assert all(call[3].get("x-serein-window-id") == "shared-window" for call in calls)
+    assert calls[0][3].get("x-serein-window-id") == first["room"]["room_slug"]
+    assert calls[1][3].get("x-serein-window-id") == second["room"]["room_slug"]
+    assert calls[0][3].get("x-serein-window-id") != calls[1][3].get("x-serein-window-id")
     assert all(call[3].get("authorization") != "Bearer " + first["gateway_key"] for call in calls)
     assert manager.resolve_gateway_key(first["gateway_key"]) == first["room"]["room_id"]
 
@@ -290,6 +293,12 @@ def test_custom_window_id_can_match_room_id_without_becoming_authentication(tmp_
                  "X-Serein-Room-ID": "other-main"},
         json={"messages":[{"role":"user","content":"synthetic"}]})
     assert denied.status_code == 403
+    # A's key + B's window header alone is also forbidden, even when
+    # X-Serein-Room-ID is omitted: no silent acceptance in A's room.
+    denied_window_only = client.post("/v1/chat/completions",
+        headers={**auth(a["gateway_key"]), "X-Serein-Window-ID": "other-main"},
+        json={"messages":[{"role":"user","content":"synthetic"}]})
+    assert denied_window_only.status_code == 403
     denied = client.post("/v1/chat/completions",
         headers={"X-Serein-Window-ID":"other-main"},
         json={"messages":[{"role":"user","content":"synthetic"}]})
