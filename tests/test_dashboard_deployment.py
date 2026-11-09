@@ -78,7 +78,7 @@ def test_admin_service_private_network_bridge_address(tmp_path):
     fake = FakeMultiRoomDocker()
     runtime = DockerRuntime(runner=fake)
     assert runtime.network_gateway_ip(manager) == "172.28.0.1"
-    fake.bridge = "203.0.113.10"
+    fake.bridge = "8.8.8.8"
     with pytest.raises(RoomError):
         runtime.network_gateway_ip(manager)
 
