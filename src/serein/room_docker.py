@@ -247,8 +247,14 @@ class DockerRuntime:
                             if item.get("Gateway") and
                             ":" not in item.get("Gateway")), None)
             address = ipaddress.ip_address(gateway)
-            if address.version != 4 or not address.is_private:
-                raise ValueError("Not a private IPv4 Docker bridge")
+            private_networks = (
+                ipaddress.ip_network("10.0.0.0/8"),
+                ipaddress.ip_network("172.16.0.0/12"),
+                ipaddress.ip_network("192.168.0.0/16"),
+            )
+            if address.version != 4 or not any(
+                    address in block for block in private_networks):
+                raise ValueError("Not an RFC1918 IPv4 Docker bridge")
         except (ValueError, IndexError, TypeError, StopIteration) as exc:
             raise RoomError("Docker bridge has no safe private IPv4 gateway") from exc
         return str(address)
@@ -299,6 +305,7 @@ class DockerRuntime:
             raise RoomError("Dashboard origin must be HTTPS or local loopback HTTP")
         manager.initialize()
         self._ensure_network(manager)
+        bridge_address = self.network_gateway_ip(manager)
         if self._docker("image", "inspect", self.dashboard_image(),
                         check=False).returncode:
             raise RoomError("Dashboard image not present: run dashboard-build")
@@ -327,7 +334,6 @@ class DockerRuntime:
             "--label", "serein.multiroom.dashboard=true",
             "--label", "serein.multiroom.installation=" + manager.namespace,
             "--network", manager.network,
-            "--add-host", "host.docker.internal:host-gateway",
             "--publish", f"127.0.0.1:{port}:8080",
             "--memory", "1g", "--cpus", "1.0", "--pids-limit", "256",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
@@ -339,7 +345,7 @@ class DockerRuntime:
             "--env", "SEREIN_WEB_AUTH_FILE=/control/secrets/web-auth.json",
             "--env", "SEREIN_MULTIROOM_CHAT_URL=http://" +
                      self.gateway_name(manager) + ":8080",
-            "--env", "SEREIN_MULTIROOM_ADMIN_URL=http://host.docker.internal:18220",
+            "--env", f"SEREIN_MULTIROOM_ADMIN_URL=http://{bridge_address}:18220",
             "--env", "SEREIN_PUBLIC_ORIGIN=" + public_origin,
             "--env", "SEREIN_GATEWAY_BIND=0.0.0.0",
             "--env", "SEREIN_GATEWAY_PORT=8080",
