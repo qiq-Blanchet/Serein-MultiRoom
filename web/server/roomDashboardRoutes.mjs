@@ -46,7 +46,8 @@ function privateDockerAdminHost(hostname) {
 
 function fields(room) {
   return {
-    room_id:room.room_id, room_slug:room.room_slug, name:room.name, state:room.state,
+    room_id:room.room_id, room_slug:room.room_slug, name:room.name,
+    display_name:room.display_name, state:room.state,
     created_at:room.created_at, source_room_id:room.source_room_id,
     docker:room.docker && {container:room.docker.container, health:room.docker.health},
   };
@@ -104,13 +105,12 @@ export async function dashboardRoomEndpoint(req, res, {
   let body;
   if (req.method === 'POST') {
     try {body = await readBody(req);} catch {send(res,400,{detail:'Invalid room creation request'});return true;}
-    if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 80
-        || typeof body.room_slug !== 'string'
+    if (typeof body.room_slug !== 'string'
         || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(body.room_slug)
         || body.room_slug.length < 3 || body.room_slug.length > 48
         || !(body.source === undefined || ['first','blank'].includes(body.source) || /^[a-f0-9]{32}$/.test(body.source))
         || (body.reuse_provider_keys !== undefined && typeof body.reuse_provider_keys !== 'boolean')
-        || Object.keys(body).some(k => !['name','room_slug','source','reuse_provider_keys'].includes(k))) {
+        || Object.keys(body).some(k => !['room_slug','source','reuse_provider_keys'].includes(k))) {
       send(res,400,{detail:'Invalid room parameters'});return true;
     }
   }
@@ -127,7 +127,7 @@ export async function dashboardRoomEndpoint(req, res, {
       method:req.method, redirect:'manual',
       headers:{'Authorization':'Bearer '+adminKey, 'Content-Type':'application/json',
                'Accept':'application/json'},
-      body:body ? JSON.stringify(body) : undefined,
+      body:body ? JSON.stringify({...body, name:body.room_slug}) : undefined,
       signal:AbortSignal.timeout(15000),
     });
     if (response.status >= 300 && response.status < 400) throw Error('Admin service redirect forbidden');
