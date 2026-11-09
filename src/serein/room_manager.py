@@ -55,7 +55,7 @@ def _private_text(path: Path, value: str) -> None:
         output.write(value)
 
 
-def _room_toml(mcp_tools: list[str]) -> str:
+def _room_toml(mcp_tools: list[str] | None) -> str:
     # Paths refer to the inside of the container, never to another room.
     return (
         '[storage]\n'
@@ -63,8 +63,8 @@ def _room_toml(mcp_tools: list[str]) -> str:
         'index = "/data/recall-index.sqlite"\n'
         '[runtime]\n'
         'writable = true\n'
-        '[mcp]\n'
-        'tools = ' + json.dumps(mcp_tools, ensure_ascii=False) + '\n'
+        + ('[mcp]\ntools = ' + json.dumps(mcp_tools, ensure_ascii=False) + '\n'
+           if mcp_tools is not None else '')
     )
 
 
@@ -337,14 +337,15 @@ class RoomManager:
                 _private_dir(home / directory)
             _secret_file(home / "secrets" / "api-token", internal_token)
             _secret_file(home / "secrets" / "gateway-key", gateway_key)
-            mcp_tools: list[str] = []
+            mcp_tools: list[str] | None = None
             if source_id:
                 source_home = self.root / "rooms" / source_id
                 source_config = source_home / "config" / "config.toml"
                 with source_config.open("rb") as file:
                     source_toml = tomllib.load(file)
-                mcp_tools = list(source_toml.get("mcp", {}).get("tools", []))
-                if not all(isinstance(tool, str) for tool in mcp_tools):
+                allowed = source_toml.get("mcp", {}).get("tools")
+                mcp_tools = list(allowed) if allowed is not None else None
+                if mcp_tools is not None and not all(isinstance(tool, str) for tool in mcp_tools):
                     raise RoomError("Source MCP tool allowlist is invalid")
             _private_text(home / "config" / "config.toml", _room_toml(mcp_tools))
             from .bootstrap import initialize
