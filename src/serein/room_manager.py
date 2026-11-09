@@ -176,7 +176,7 @@ class RoomManager:
         with self._connect() as database:
             database.execute("BEGIN IMMEDIATE")
             rooms = database.execute(
-                "SELECT room_id,gateway_key_sha256 FROM rooms WHERE state='ready' "
+                "SELECT room_id,room_slug,gateway_key_sha256 FROM rooms WHERE state='ready' "
                 "ORDER BY room_id"
             ).fetchall()
             entries = []
@@ -189,6 +189,7 @@ class RoomManager:
                     raise RoomError("Ready room internal key is invalid")
                 entries.append({
                     "room_id": room["room_id"],
+                    "room_slug": room["room_slug"],
                     "gateway_key_sha256": room["gateway_key_sha256"],
                     "internal_token": token,
                 })
@@ -209,6 +210,7 @@ class RoomManager:
             _private_dir(self.root / "control")
         if not self.gateway_routes.parent.exists():
             _private_dir(self.gateway_routes.parent)
+        migrated = False
         with self._connect() as database:
             database.executescript(CONTROL_SCHEMA)
             # Add a human-readable room identifier without renaming or moving
@@ -217,15 +219,21 @@ class RoomManager:
             columns = {row["name"] for row in database.execute("PRAGMA table_info(rooms)")}
             if "room_slug" not in columns:
                 database.execute("ALTER TABLE rooms ADD COLUMN room_slug TEXT")
-            database.execute(
-                "UPDATE rooms SET room_slug='room-' || room_id "
-                "WHERE room_slug IS NULL"
-            )
+                migrated = True
+            missing = database.execute(
+                "SELECT COUNT(*) FROM rooms WHERE room_slug IS NULL"
+            ).fetchone()[0]
+            if missing:
+                database.execute(
+                    "UPDATE rooms SET room_slug='room-' || room_id "
+                    "WHERE room_slug IS NULL"
+                )
+                migrated = True
             database.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS rooms_slug_unique ON rooms(room_slug)"
             )
             database.commit()
-        if not self.gateway_routes.exists():
+        if migrated or not self.gateway_routes.exists():
             self._publish_routes()
 
     def _connect(self):
