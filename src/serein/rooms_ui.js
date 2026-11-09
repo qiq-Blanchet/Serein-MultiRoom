@@ -64,7 +64,7 @@
     for (const room of rooms) {
       const article = node("article", "room");
       const top = node("div", "room-top");
-      const title = node("h3", "", room.name);
+      const title = node("h3", "", room.display_name || room.room_slug || room.name);
       const badge = node("span", "pill " + (room.state === "ready" ? "ready" : room.state === "error" ? "error" : ""),
                          room.state);
       top.append(title, badge);
@@ -159,14 +159,13 @@
     message("create-message", "正在初始化独立房间……");
     try {
       const result = await api("/api/rooms", "POST", {
-        name: $("room-name").value.trim(),
+        name: $("room-id").value.trim(),
         room_slug: $("room-id").value.trim(),
         source: $("room-source").value,
         reuse_provider_keys: $("reuse-provider").checked,
       });
       text("new-room-key", result.gateway_key);
       $("secret-panel").hidden = false;
-      $("room-name").value = "";
       $("room-id").value = "";
       $("reuse-provider").checked = false;
       await refresh();
