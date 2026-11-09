@@ -64,7 +64,7 @@ python3 scripts/rooms.py --root "$ROOM_ROOT" dashboard-status
 ssh -L 18217:127.0.0.1:18217 your-user@your-vps
 ```
 
-在自己的电脑打开 `http://127.0.0.1:18217`，输入 `web-auth` 阶段设置的用户名和密码。进入 Dashboard 后，左侧靠下有「切换房间」按钮；从中创建新房间并启动即可，无需再进入 VPS 修改配置。**新建时只填房间 ID**（例如 `xiaogi-main`），AI 显示名字日后在原版「设置 → 外观」编辑；创建时会展示随机生成的房间 Gateway Key。Operit 的自定义请求可使用 `X-Serein-Window-ID: xiaogi-main`，但真正访问哪个房间仍由 Gateway Key 鉴权决定。配置来源可选首房、指定房间或空白房间，复用模型供应商密钥须显式勾选。
+在自己的电脑打开 `http://127.0.0.1:18217`，输入 `web-auth` 阶段设置的用户名和密码。进入 Dashboard 后，左侧靠下有「切换房间」按钮；从中创建新房间并启动即可，无需再进入 VPS 修改配置。**新建时只填房间 ID**（例如 `xiaogi-main`），AI 显示名字日后在原版「设置 → 外观」编辑；创建时会展示随机生成的房间 Gateway Key。Operit 的自定义请求应填写 `X-Serein-Window-ID: xiaogi-main` 并使用这间房随机生成的 Gateway Key。**每个 AI 的房间 ID、请求头值和 Gateway Key 均独立，不得交叉复用**；网关校验 Key 与请求头一致，不匹配立即 403。配置来源可选首房、指定房间或空白房间，复用模型供应商密钥须显式勾选。
 
 正式公网 HTTPS 入口需要**现有或单独配置的 TLS 反向代理**，终止 HTTPS 后回源宿主机 `127.0.0.1:18217`：
 
