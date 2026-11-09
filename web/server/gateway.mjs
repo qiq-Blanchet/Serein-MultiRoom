@@ -4,13 +4,15 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { preview } from 'vite';
 import { requireWebAuth } from './webAuth.mjs';
-import { adminBasicMatches, effectiveRoom, readyRooms, signedPreviewRoom } from './roomSession.mjs';
+import { effectiveRoom, readyRooms, signedPreviewRoom } from './roomSession.mjs';
 import { dashboardRoomEndpoint } from './roomDashboardRoutes.mjs';
 
 // Legacy deployments continue to use their original single-room settings.
 const multiRoom = Boolean(process.env.SEREIN_MULTIROOM_ROUTES_FILE);
 const filename = process.env.SEREIN_WEB_AUTH_FILE;
-if (!multiRoom && !filename) throw new Error('SEREIN_WEB_AUTH_FILE is required');
+// Reuse the original dashboard login with user-chosen username and password.
+// The separate administrator key is internal, never a browser password.
+if (!filename) throw new Error('SEREIN_WEB_AUTH_FILE is required');
 const adminKey = multiRoom ? readFileSync(process.env.SEREIN_MULTIROOM_ADMIN_KEY_FILE, 'utf8').trim() : null;
 if (multiRoom && (!adminKey || adminKey.length < 48)) throw new Error('Multi-room admin key must be initialized');
 const core = new URL(multiRoom
@@ -78,13 +80,9 @@ const server = http.createServer((req, res) => {
     try { originOK = new URL(req.headers.origin).host === req.headers.host; } catch {}
     if (!originOK) { res.writeHead(403); res.end('Invalid origin'); return; }
   }
-  if (multiRoom && !chat) {
-    if (!adminBasicMatches(req.headers.authorization, adminKey)) {
-      res.writeHead(401, {'WWW-Authenticate':'Basic realm="Serein Rooms", charset="UTF-8"',
-                          'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
-      res.end('Administrator authentication required'); return;
-    }
-  } else if (!chat && !oauth && !requireWebAuth(req, res, filename)) return;
+  // Both single-room and multi-room dashboards use the original scrypt-hashed
+  // web-auth.json. Room changes never ask for a second password.
+  if (!chat && !oauth && !requireWebAuth(req, res, filename)) return;
   if (!chat && !oauth && !['GET','HEAD','OPTIONS'].includes(req.method)) {
     let originOK = true;
     try { if (req.headers.origin) originOK = new URL(req.headers.origin).host === req.headers.host; }
