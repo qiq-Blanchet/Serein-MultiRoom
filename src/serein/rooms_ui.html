@@ -98,12 +98,10 @@
         <h2>添加 AI 房间</h2>
         <p class="muted">每间房有独立数据库、索引和内部密钥。无需复制 Serein 源码。</p>
         <form id="create-form">
-          <label for="room-name">房间名称</label>
-          <input id="room-name" type="text" maxlength="80" required placeholder="例如：新伙伴">
           <label for="room-id">房间 ID</label>
           <input id="room-id" type="text" minlength="3" maxlength="48" required
             pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*" placeholder="例如：xiaogi-main">
-          <p class="muted">创建前填写；房间 ID 唯一且不可重复。它与聊天窗口 ID 可以使用同一文本。</p>
+          <p class="muted">例如 xiaogi-main。这个 ID 与自定义请求里的 X-Serein-Window-ID 可以一致。AI 的显示名字仍在「设置 → 外观」修改。</p>
           <label for="room-source">配置来源</label>
           <select id="room-source">
             <option value="first">复制第一个房间的功能配置（默认）</option>
