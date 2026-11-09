@@ -27,7 +27,7 @@
 
 ### 单次鉴权与选房
 
-多房间模式下，Serein Web Gateway 使用 **HTTP Basic，用户名固定为 `admin`、密码为管理员 Key**。由 HTTPS 反向代理加密传输；浏览器会在同一个站点记住已输入的登录凭据，不需要每换一间房重新输入。其余页面请求仍必须经过管理员认证。
+多房间模式下，Serein Web Gateway **继续使用原版的 `webAuth.mjs` 登录方式**：HTTP Basic 用户名与密码可由用户自行设置（`scripts/rooms.py web-auth`），凭据按原版 scrypt 格式存入 `control/secrets/web-auth.json`，而不是固定用户名 `admin`，更不是把内部管理员 Key 当成网页登录密码。由 HTTPS 反向代理加密传输；浏览器在同一站点完成一次验证，切换房间时不再要求重新输入。**独立管理员 Key 只用于受信任服务之间的管理 API 调用**，浏览器永远不接收它。
 
 房间选择由服务端签名后存放在 `HttpOnly; SameSite=Strict` cookie 中，并不是外部 Gateway Key，不能单独用 cookie 获得管理员权限。实际路由是通过已经由服务端验证的 ready 房间清单和内部 Serein token 完成；没有通过校验时**绝不回退到原版第一间 memory 库**。可选 `X-Serein-Window-ID` 始终只是当前房间内的窗口标识。
 
@@ -44,7 +44,7 @@ SEREIN_PUBLIC_ORIGIN=https://your-own-host.example/
 SEREIN_GATEWAY_BIND=127.0.0.1
 ```
 
-这些只是 Node 网关的**可选配置接口**，启用前还需要根据部署方式保证 Node 进程能够访问 M2 网关、管理员服务，并能解析私人 Docker network 中的 `room-<id>` 主机名。**本阶段没有完成把 Node 网关、Python 管理层和多个 Docker 房间打包成可一键运行的统一 Compose/服务栈。** 不要单凭上述环境变量就在正在使用的 VPS 上替换原版部署。特别是，旧单房容器的 `SEREIN_WEB_AUTH_FILE` 和 `SEREIN_MEMORY_URL` 仍保持原样使用。
+这些只是 Node 网关的**可选配置接口**，启用前还需要根据部署方式保证 Node 进程能够访问 M2 网关、管理员服务，并能解析私人 Docker network 中的 `room-<id>` 主机名。**本阶段之后已实现独立 Dashboard Docker 启动命令及宿主机私有网桥管理层连接，详见 [ROOMS_M3_PHASE3.md](ROOMS_M3_PHASE3.md)。** 这仍不等于完成真实 VPS 验收或生产级一键部署。 不要单凭上述环境变量就在正在使用的 VPS 上替换原版部署。特别是，旧单房容器的 `SEREIN_WEB_AUTH_FILE` 和 `SEREIN_MEMORY_URL` 仍保持原样使用。
 
 如需从网页创建**第一间**房，当前要求先通过 M1 或独立 M3 Phase1 管理器创建并启动至少一间 ready 房间；没有 ready 房间时统一原版 Dashboard 仍会故障关闭，不会把空站点强行接上不明数据库。之后可以在左侧菜单添加其他房间并启动。
 
