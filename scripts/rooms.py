@@ -31,6 +31,8 @@ def parser_for_rooms():
     commands.add_parser("list", help="List room metadata, excluding secrets")
     make = commands.add_parser("create", help="Create an isolated stopped room")
     make.add_argument("name")
+    make.add_argument("--room-id", dest="room_slug", default=None,
+                      help="Unique room ID, e.g. xiaogi-main (optional for CLI)")
     source = make.add_mutually_exclusive_group()
     source.add_argument("--blank", action="store_true",
                         help="Start without source configuration")
@@ -84,7 +86,7 @@ def main(argv=None):
         result = {"rooms": manager.list_rooms()}
     elif args.command == "create":
         source = "blank" if args.blank else args.source or "first"
-        created = manager.create(args.name, source=source,
+        created = manager.create(args.name, source=source, room_slug=args.room_slug,
                                  reuse_provider_keys=args.reuse_provider_keys)
         result = {"room": created["room"]}
         if args.show_gateway_key:
