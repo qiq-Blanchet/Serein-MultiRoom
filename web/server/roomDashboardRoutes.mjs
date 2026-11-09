@@ -37,7 +37,7 @@ function privateDockerAdminHost(hostname) {
   // The dashboard may run in the installation's private Docker network.
   // Never allow arbitrary public or link-local hosts as control-plane targets.
   const parts = String(hostname || "").split(".");
-  if (parts.length !== 4 || parts.some(part => !/^\\d{1,3}$/.test(part) ||
+  if (parts.length !== 4 || parts.some(part => !/^\d{1,3}$/.test(part) ||
       Number(part) > 255)) return false;
   const [first, second] = parts.map(Number);
   return first === 10 || first === 172 && second >= 16 && second <= 31
