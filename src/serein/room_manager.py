@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import sqlite3
@@ -19,6 +20,7 @@ from uuid import uuid4
 
 DEFAULT_IMAGE = "serein-multiroom:dev"
 KEY_BYTES = 48
+ROOM_SLUG_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 CONTROL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS rooms (
   room_id TEXT PRIMARY KEY,
@@ -209,6 +211,20 @@ class RoomManager:
             _private_dir(self.gateway_routes.parent)
         with self._connect() as database:
             database.executescript(CONTROL_SCHEMA)
+            # Add a human-readable room identifier without renaming or moving
+            # existing UUID-backed folders, databases, or gateway credentials.
+            # Older installations receive a stable legacy identifier.
+            columns = {row["name"] for row in database.execute("PRAGMA table_info(rooms)")}
+            if "room_slug" not in columns:
+                database.execute("ALTER TABLE rooms ADD COLUMN room_slug TEXT")
+            database.execute(
+                "UPDATE rooms SET room_slug='room-' || room_id "
+                "WHERE room_slug IS NULL"
+            )
+            database.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS rooms_slug_unique ON rooms(room_slug)"
+            )
+            database.commit()
         if not self.gateway_routes.exists():
             self._publish_routes()
 
@@ -224,7 +240,7 @@ class RoomManager:
         self.initialize()
         with self._connect() as database:
             rows = database.execute(
-                "SELECT room_id,name,created_at,state,source_room_id,image,last_error "
+                "SELECT room_id,room_slug,name,created_at,state,source_room_id,image,last_error "
                 "FROM rooms ORDER BY created_at,room_id"
             ).fetchall()
         return [dict(row) for row in rows]
@@ -236,7 +252,7 @@ class RoomManager:
         self.initialize()
         with self._connect() as database:
             row = database.execute(
-                "SELECT room_id,name,created_at,state,source_room_id,image,last_error "
+                "SELECT room_id,room_slug,name,created_at,state,source_room_id,image,last_error "
                 "FROM rooms WHERE room_id=?", (room_id,)
             ).fetchone()
         if row is None:
@@ -257,7 +273,8 @@ class RoomManager:
         self._publish_routes()
 
     def create(self, name: str, *, source: str = "first",
-               reuse_provider_keys: bool = False) -> dict:
+               reuse_provider_keys: bool = False,
+               room_slug: str | None = None) -> dict:
         """Create a blank isolated DB or a configuration-only clone.
 
         'first' selects the oldest existing room, otherwise the explicit ID.
@@ -270,6 +287,13 @@ class RoomManager:
             self.get(source)
         self.initialize()
         room_id = uuid4().hex
+        # Room slug is a unique *public label*. Internal UUID keeps directory
+        # and routing identities immutable; X-Serein-Window-ID stays per-chat.
+        if room_slug is None:
+            room_slug = "room-" + room_id
+        if (not isinstance(room_slug, str) or not 3 <= len(room_slug) <= 48
+                or ROOM_SLUG_RE.fullmatch(room_slug) is None):
+            raise RoomError("Room ID needs 3-48 lowercase letters, digits or hyphens")
         gateway_key = secrets.token_urlsafe(KEY_BYTES)
         internal_token = secrets.token_urlsafe(KEY_BYTES)
         created_at = datetime.now(timezone.utc).isoformat()
@@ -288,12 +312,15 @@ class RoomManager:
                 ).fetchone()
                 if not existing or existing["state"] in ("creating", "error"):
                     raise RoomError("Source room is incomplete or unavailable")
-            database.execute(
-                "INSERT INTO rooms(room_id,name,created_at,state,source_room_id,image,gateway_key_sha256) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (room_id, name, created_at, "creating", source_id, self.image,
-                 hashlib.sha256(gateway_key.encode()).hexdigest()),
-            )
+            try:
+                database.execute(
+                    "INSERT INTO rooms(room_id,room_slug,name,created_at,state,source_room_id,image,gateway_key_sha256) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (room_id, room_slug, name, created_at, "creating", source_id,
+                     self.image, hashlib.sha256(gateway_key.encode()).hexdigest()),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise RoomError("Room ID is already in use") from exc
             database.commit()
         home = self.root / "rooms" / room_id
         try:
