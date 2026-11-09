@@ -114,3 +114,30 @@ test('room creation and start use same admin credential without another login', 
     assert.equal(sent[1].auth,'Bearer '+KEY);
   } finally {rmSync(root,{recursive:true,force:true});}
 });
+
+test('Dashboard reaches only the selected RFC1918 bridge control service', async () => {
+  const root=mkdtempSync(join(tmpdir(),'dashboard-bridge-'));
+  const routes=join(root,'routes.json');manifest(routes);
+  const seen=[];
+  const handler=async (url, params)=>{
+    seen.push(String(url));
+    assert.equal(params.headers.Authorization,'Bearer '+KEY);
+    return new Response(JSON.stringify({rooms:[]}),{status:200});
+  };
+  try {
+    let response=capture();
+    await dashboardRoomEndpoint(req(),response,{
+      ...options(routes,handler),adminURL:'http://172.28.0.1:18220',
+      path:'/__serein/rooms',
+    });
+    assert.equal(response.statusCode,200);
+    assert.deepEqual(seen,['http://172.28.0.1:18220/api/rooms']);
+    response=capture();
+    await dashboardRoomEndpoint(req(),response,{
+      ...options(routes,handler),adminURL:'http://8.8.8.8:18220',
+      path:'/__serein/rooms',
+    });
+    assert.equal(response.statusCode,502);
+    assert.equal(seen.length,1);
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
