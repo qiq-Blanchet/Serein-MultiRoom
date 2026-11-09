@@ -7,7 +7,7 @@
 ## 本阶段已经加入的功能
 
 - 独立的 FastAPI 管理层：`src/serein/room_admin.py`。使用 `RoomManager` 业务逻辑，支持查询房间及 Docker 健康信息、创建房间、启动和停止房间。
-- 独立响应式网页：`src/serein/rooms_ui.html` 与 `src/serein/rooms_ui.js`。可选择「复制首房配置」「指定来源房间」「空白初始化」，并单独选择是否复用模型供应商密钥。展示房间状态，支持启动和停止；刚创建的房间 Gateway Key 只在新建响应里展示一次。
+- 独立响应式网页：`src/serein/rooms_ui.html` 与 `src/serein/rooms_ui.js`。**创建时只填写一个唯一的房间 ID**（例如 `xiaogi-main`），不额外设置房间标识或 AI 名称；AI 的显示名字仍在原版「设置 → 外观」中编辑。可选择「复制首房配置」「指定来源房间」「空白初始化」，并单独选择是否复用模型供应商密钥。展示房间状态，支持启动和停止；刚创建的房间 Gateway Key 只在新建响应里展示一次。
 - 新的管理员身份：`control/secrets/admin-key`，与每个 AI 用于 Chat/MCP 的 Gateway Key **完全分离**。浏览器只在当前页面内存中持有管理员密钥，不用 cookie、localStorage、sessionStorage；刷新后需重新验证。除了静态页面，所有管理 API 都需要管理员密钥。
 - 默认只绑定 `127.0.0.1:18220`，不会占用原版网页或 M2 Chat/MCP 网关的端口。远程查看请使用 **SSH 本地端口转发** 或先构建明确的 HTTPS 鉴权反向代理，**不可直接暴露 HTTP 控制接口到公网**。
 - 不通过管理员网页直接复制、展示或访问房间私有 Scene、Event、原话、日记、梦境、心绪、备忘等。配置复制继续复用 M1 字段级白名单，功能「开启」状态可继承，功能产生的内容不会被复制。
