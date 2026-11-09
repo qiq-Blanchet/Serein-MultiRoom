@@ -103,8 +103,8 @@ def test_original_dashboard_container_uses_internal_routes_not_room_db_mounts(tm
     envs = [dashboard_cmd[i + 1] for i, item in enumerate(dashboard_cmd) if item == "--env"]
     mounts = [dashboard_cmd[i + 1] for i, item in enumerate(dashboard_cmd) if item == "--mount"]
     assert dashboard_cmd[dashboard_cmd.index("--publish") + 1] == "127.0.0.1:18217:8080"
-    assert dashboard_cmd[dashboard_cmd.index("--add-host") + 1] == "host.docker.internal:host-gateway"
-    assert "SEREIN_MULTIROOM_ADMIN_URL=http://host.docker.internal:18220" in envs
+    assert "--add-host" not in dashboard_cmd
+    assert "SEREIN_MULTIROOM_ADMIN_URL=http://172.28.0.1:18220" in envs
     assert ("SEREIN_MULTIROOM_CHAT_URL=http://" +
             runtime.gateway_name(manager) + ":8080") in envs
     assert "SEREIN_PUBLIC_ORIGIN=http://127.0.0.1:18217" in envs
