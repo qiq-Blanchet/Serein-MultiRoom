@@ -143,3 +143,39 @@ test('Dashboard reaches only the selected RFC1918 bridge control service', async
     assert.equal(seen.length,1);
   } finally {rmSync(root,{recursive:true,force:true});}
 });
+
+test('room creation requires one creation-time ID but no duplicate room-name setting', async () => {
+  const root=mkdtempSync(join(tmpdir(),'dashboard-room-id-')),path=join(root,'routes.json');
+  manifest(path);
+  const sent=[];
+  const handler=async (url,params)=>{
+    sent.push(JSON.parse(params.body));
+    return new Response(JSON.stringify({
+      room:{room_id:B,room_slug:'xiaogi-main',display_name:'xiaogi-main',state:'stopped'},
+      gateway_key:'SYNTHETIC_ROOM_GATEWAY_KEY',
+    }),{status:201});
+  };
+  try {
+    let res=capture();
+    await dashboardRoomEndpoint(req('POST',{source:'first'}),res,{
+      ...options(path,handler),path:'/__serein/rooms',
+    });
+    assert.equal(res.statusCode,400);
+    for(const id of ['bad space','XiaoGi','../../../etc','x','room--two']) {
+      res=capture();
+      await dashboardRoomEndpoint(req('POST',{room_slug:id}),res,{
+        ...options(path,handler),path:'/__serein/rooms',
+      });
+      assert.equal(res.statusCode,400);
+    }
+    assert.equal(sent.length,0);
+    res=capture();
+    await dashboardRoomEndpoint(req('POST',{room_slug:'xiaogi-main'}),res,{
+      ...options(path,handler),path:'/__serein/rooms',
+    });
+    assert.equal(res.statusCode,201);
+    assert.deepEqual(sent,[{room_slug:'xiaogi-main',name:'xiaogi-main'}]);
+    assert.equal(JSON.parse(res.body).gateway_key,'SYNTHETIC_ROOM_GATEWAY_KEY');
+    assert.equal(JSON.parse(res.body).room.room_slug,'xiaogi-main');
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
