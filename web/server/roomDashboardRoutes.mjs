@@ -33,6 +33,17 @@ async function readBody(req) {
   return body;
 }
 
+function privateDockerAdminHost(hostname) {
+  // The dashboard may run in the installation's private Docker network.
+  // Never allow arbitrary public or link-local hosts as control-plane targets.
+  const parts = String(hostname || "").split(".");
+  if (parts.length !== 4 || parts.some(part => !/^\\d{1,3}$/.test(part) ||
+      Number(part) > 255)) return false;
+  const [first, second] = parts.map(Number);
+  return first === 10 || first === 172 && second >= 16 && second <= 31
+    || first === 192 && second === 168;
+}
+
 function fields(room) {
   return {
     room_id:room.room_id, name:room.name, state:room.state,
@@ -105,7 +116,8 @@ export async function dashboardRoomEndpoint(req, res, {
     const base = new URL(adminURL);
     if (base.username || base.password || base.pathname !== '/' || base.search || base.hash
         || base.protocol !== 'http:'
-        || !['localhost','127.0.0.1','[::1]','serein-room-admin','host.docker.internal'].includes(base.hostname)) {
+        || !['localhost','127.0.0.1','[::1]','serein-room-admin'].includes(base.hostname)
+        && !privateDockerAdminHost(base.hostname)) {
       throw Error('Invalid private administrator service URL');
     }
     const response = await fetchImpl(new URL('/api/rooms', base), {
