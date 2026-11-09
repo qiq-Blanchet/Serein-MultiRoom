@@ -200,6 +200,7 @@ export function App() {
         onShowCover={() => navigateTo("醒来", 0, "cover")}
         onSettingsOpenChange={setSettingsOpen}
         onOpenEventGuide={() => { navigateTo("使用说明"); setHelpPage("events"); }}
+        roomSwitcher={roomSwitcher}
       />
 
       {activeArea === "沉淀" && <section className="mailbox-page" aria-label="沉淀">
