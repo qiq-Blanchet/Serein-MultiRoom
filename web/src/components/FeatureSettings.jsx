@@ -1,5 +1,6 @@
 import {Fragment,useEffect,useState} from 'react';
 import {instanceSettings} from '../storage/instanceStore.js';
+import { McpPermissionSettings } from './McpPermissionSettings.jsx';
 
 const features = {
   image_transcription_async:['异步图片转录','原图照常交给能识图的主模型；回复完成后在后台转录，并把结果写回同一条原始消息。不阻塞当前回复，也不把转录注入当前聊天。'],
@@ -67,5 +68,6 @@ export function FeatureSettings({onOpenSummary}) {
         {keys.map(feature)}
       </details>)}
       <div className="settings-actions"><button disabled={busy} type="submit">保存功能设置</button></div></form>}
+    <McpPermissionSettings />
     <p role="status">{status}</p></section>;
 }
