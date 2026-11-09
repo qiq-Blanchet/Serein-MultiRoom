@@ -2,7 +2,7 @@
 
 > **文档定位：** 本文件是 Serein-MultiRoom 项目的长期设计基线（source of truth），供以后的人类开发者及 AI 编程助手在上下文压缩、跨会话、多人协作后继续使用。实现前先读本文；如果某项实现与本文冲突，先提出变更，不要私自改变已经决定的产品方向。
 >
-> **状态：** 总体需求已确认；M1 房间管理内核、M2 Chat/MCP 静态网关、M3 首期独立管理员控制台以及**M3 第二阶段原版 Dashboard 可选房间切换按钮/配置桥接**已提交并通过离线自动化回归；**真实 VPS Docker 多房间联机仍未验证，一体化部署编排、全功能网页场景验收、MCP/OAuth、备份与统一升级仍未完成**。下文中的接口、目录、命令和网页界面只要标为「建议／拟议」，就不是当前代码已经具备的功能。
+> **状态：** 总体需求已确认；M1 房间管理内核、M2 Chat/MCP 静态网关、M3 原版 Dashboard 可选房间切换及第三阶段隔离 Docker 启动编排均已提交，离线模拟/构建回归已通过。Dashboard 沿用原版**用户自定义用户名＋密码**，内部管理员 Key 不用于网页登录；**真实 VPS 多房间 Docker 联机、全功能页面端到端验收、MCP OAuth、备份和统一升级仍未完成**。下文中的接口、目录、命令和网页界面只要标为「建议／拟议」，就不是当前代码已经具备的功能。
 >
 > **建立日期：** 2026-11-08  
 > **目标仓库：** `qiq-Blanchet/Serein-MultiRoom`  
@@ -303,13 +303,14 @@ runtime/
 - [x] M0 开发分支核心自动化回归通过（离线 CI）；尚未在真实 VPS 测试。
 - [ ] M1 房间管理内核：已完成房间注册、隔离目录、空库初始化、配置白名单克隆、CLI、Docker 容器生命周期与模拟测试；**仍待真实 Docker 双房启动验收**，详见 [ROOMS_M1.md](ROOMS_M1.md)。
 - [ ] M2 鉴权与路由：Chat/MCP 静态 Bearer 分流、安全代理与隔离测试已实现；仍待 VPS 双房实测、密钥轮换及 OAuth（M5）。
-- [ ] M3 网页管理与配置克隆：**首期**独立管理员管理台已实现；**第二阶段**可选单按钮已放入原版侧边栏，浏览器管理员 Basic 登录一次，支持创建/启动/选房，原版服务端桥接和浏览器本地存储按 room 隔离，Node 测试与 Vite 构建已通过；**仍待一体化 Docker 部署、完整页面真实联机验收和功能/MCP 白名单编辑**。见 [ROOMS_M3_PHASE1.md](ROOMS_M3_PHASE1.md)、[ROOMS_M3_PHASE2.md](ROOMS_M3_PHASE2.md)。
+- [ ] M3 网页管理与配置克隆：**首期**独立管理员管理台已实现；**第二阶段**原版 Dashboard 的小房间切换按钮支持网页创建/启动/切房；**第三阶段**增加 Dashboard Docker 镜像构建、私有网桥管理员服务连接、可自选原版网页登录用户名/密码与独立 CLI；已通过离线回归，**仍待真实 VPS 多容器联机、原版所有功能页面端到端测试，以及 MCP 权限编辑**。见 [ROOMS_M3_PHASE1.md](ROOMS_M3_PHASE1.md)、[ROOMS_M3_PHASE2.md](ROOMS_M3_PHASE2.md)、[ROOMS_M3_PHASE3.md](ROOMS_M3_PHASE3.md)。
 - [ ] M4 完整功能与任务隔离。
 - [ ] M5 OAuth、备份、统一升级。
 - [ ] M6 发布准备。
 
 ### 实施记录（2026-11-09）
 
+- **M3 第三阶段隔离部署已提交**：原版 `deploy/Gateway.Dockerfile` 构建一份共享网页镜像，`scripts/rooms.py dashboard-build/start/status/stop` 启动原版网页，多房间控制层由 VPS 宿主机绑定安装专属 RFC1918 Docker bridge IP。原版单房 `deploy/compose.yaml` 不变。新增 `web-auth` 交互命令，可设置中文/任意合规用户名和密码并使用原版 scrypt 格式；Key 仅用于内部管理 API。**仅通过模拟 Docker，仍待实机联机验收**。见 [ROOMS_M3_PHASE3.md](ROOMS_M3_PHASE3.md)。
 - **M3 第二阶段原版侧边栏已提交**：在「使用说明／花园／设置」上方加入一个可选的小房间切换入口，复用同站点管理员鉴权，不要求每次切换重新登录。Dashboard 的原功能模块通过签名 room 上下文按房间桥接；浏览器 local/session storage、花园、叙事预览和路由草稿按房间隔离；`main` 原样保留，单房运行默认不开启多房间模式。**真实生产部署网络/容器集成仍未完成**。见 [ROOMS_M3_PHASE2.md](ROOMS_M3_PHASE2.md)。
 - **M3 首期独立控制台已提交**：`src/serein/room_admin.py` 及 `rooms_ui.html/js`，按单独的管理员密钥授权查看、创建、启停房间并选择配置克隆来源；`scripts/rooms.py admin-init/admin-serve` 仅在 loopback 上启动，原版 Web 代码未改动。见 [ROOMS_M3_PHASE1.md](ROOMS_M3_PHASE1.md)。**不是原版所有功能页面整合完成**。
 - **M2 静态入口已提交**：`src/serein/room_gateway.py` 负责按已验证 Key 分流 Chat/MCP；`src/serein/room_manager.py` 发布仅含 ready 房间凭据映射的私有路由清单；`src/serein/room_docker.py` 能启动唯一的 loopback-only 网关容器。网关不可访问管理 API/OAuth，详见 [ROOMS_M2.md](ROOMS_M2.md)。真实 Docker 部署仍待验证。
@@ -330,6 +331,7 @@ runtime/
 - **D007**：先基于多个相互隔离的 Serein 实例编排，不采用单物理数据库的多租户改造。
 - **D009（2026-11-09）**：M3 首期新增独立 loopback 管理控制台与独立管理员身份，暂不替换原版网页入口，不改原版挂载、核心记忆功能与数据库语义；未来复用原版功能页前必须核对房间上下文和权限。
 - **D010（2026-11-09）**：原版 Dashboard 多房间模式必须仅增添小型侧边栏按钮（与下方导航同间距），切房不重复密码，管理员身份为同站点唯一管理鉴权；创建、配置更新和房间启停尽量在网页完成。多房间为显式 opt-in，保留原版单房网页鉴权/挂载行为。客户端本地状态及 Vite 服务端临时草稿也要按房间隔离。
+- **D011（2026-11-09）**：网页登录继续使用原版用户可自选用户名＋密码及 scrypt 哈希文件，不将内部管理 Key 设为固定用户名 `admin` 的网页密码；多房间部署使用新的可选 CLI，不修改原版 Compose/挂载。
 - **D008（2026-11-09）**：复制房间只复制功能性配置的字段级白名单；梦境、心绪、备忘、日记及其他私人内容和任务状态绝不继承。M2 先仅开放 Chat/MCP 静态 Bearer，统一管理鉴权与 OAuth 分别在后续阶段完成。
 
 ### 待实现阶段再评估的工程细节（不改变以上产品决策）
