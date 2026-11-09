@@ -196,3 +196,52 @@ def test_cli_can_create_and_list_rooms_without_docker(tmp_path):
     listing = subprocess.run([*command, "list"], capture_output=True, text=True, check=True)
     assert json.loads(listing.stdout)["rooms"][0]["room_id"] == room_id
     assert "gateway-key" not in listing.stdout
+
+
+def test_requested_room_id_is_unique_and_preserves_existing_room_data(tmp_path):
+    """Room ID is chosen at creation; not a second Appearance setting."""
+    manager = RoomManager(tmp_path / "rooms")
+    original = manager.create("xiaogi-main", room_slug="xiaogi-main", source="blank")
+    key = original["gateway_key"]
+    room = original["room"]
+    assert room["room_slug"] == "xiaogi-main"
+    assert room["room_id"] != room["room_slug"]
+    assert manager.room_dir(room["room_id"]).is_dir()
+    with pytest.raises(RoomError, match="already in use"):
+        manager.create("Duplicate", room_slug="xiaogi-main", source="blank")
+    for invalid in ("../escape", "XiaoGi", "x", "a--b", "-room", "room_2", "room/2"):
+        with pytest.raises(RoomError):
+            manager.create("Invalid", room_slug=invalid, source="blank")
+    assert len(manager.list_rooms()) == 1
+    manager._set_state(room["room_id"], "ready")
+    assert manager.resolve_gateway_key(key) == room["room_id"]
+    manifest = json.loads(manager.gateway_routes.read_text())
+    assert manifest["rooms"][0]["room_slug"] == "xiaogi-main"
+    assert key not in manager.gateway_routes.read_text()
+
+
+def test_existing_uuid_rooms_migrate_without_renaming_or_copying(tmp_path):
+    """Migration must keep all original keys, file paths and private memories."""
+    manager = RoomManager(tmp_path / "rooms")
+    existing = manager.create("Old room", source="blank")
+    uuid = existing["room"]["room_id"]
+    old_dir = manager.room_dir(uuid)
+    with sqlite3.connect(old_dir / "data" / "serein.db") as connection:
+        connection.execute("CREATE TABLE old_private_canary(secret TEXT)")
+        connection.execute("INSERT INTO old_private_canary VALUES ('OLD_MEMORY')")
+        connection.commit()
+    manager._set_state(uuid, "ready")
+    with sqlite3.connect(manager.registry) as connection:
+        # Recreate a legacy registry without room_slug.
+        connection.execute("DROP INDEX rooms_slug_unique")
+        connection.execute("ALTER TABLE rooms DROP COLUMN room_slug")
+        connection.commit()
+    manager.initialize()
+    migrated = manager.get(uuid)
+    assert migrated["room_slug"] == "room-" + uuid
+    assert manager.room_dir(uuid) == old_dir
+    assert manager.resolve_gateway_key(existing["gateway_key"]) == uuid
+    with sqlite3.connect(old_dir / "data" / "serein.db") as connection:
+        assert connection.execute("SELECT secret FROM old_private_canary").fetchone()[0] == "OLD_MEMORY"
+    manifest = json.loads(manager.gateway_routes.read_text())
+    assert manifest["rooms"][0]["room_slug"] == "room-" + uuid
