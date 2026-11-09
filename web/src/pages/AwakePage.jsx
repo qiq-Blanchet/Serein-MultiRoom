@@ -44,6 +44,7 @@ export function AwakePage({
   onShowCover,
   onSettingsOpenChange,
   onOpenEventGuide,
+  roomSwitcher = null,
 }) {
   const compositionRef = useRef(null);
   const shadowTriggerRef = useRef(null);
@@ -658,6 +659,7 @@ export function AwakePage({
           </div>
 
           <Sidebar
+            roomSwitcher={roomSwitcher}
             activeArea={activeArea}
             onNavigate={navigateFromAwake}
             onUnavailable={onUnavailable}
@@ -670,7 +672,7 @@ export function AwakePage({
         </div>
       </section>
 
-      {settingsOpen && <Sidebar activeArea="设置" onNavigate={navigateFromAwake} onOpenSettings={() => {}} />}
+      {settingsOpen && <Sidebar roomSwitcher={roomSwitcher} activeArea="设置" onNavigate={navigateFromAwake} onOpenSettings={() => {}} />}
       <SettingsPanel
         open={settingsOpen}
         onOpenEventGuide={onOpenEventGuide}
