@@ -14,6 +14,7 @@ import hmac
 import os
 from importlib.resources import files
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -33,6 +34,12 @@ class CreateRoom(BaseModel):
                                    pattern=r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
     source: str = Field(default="first", min_length=1, max_length=40)
     reuse_provider_keys: bool = False
+
+
+class McpPermissionChange(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    mode: Literal["original", "custom"]
+    tools: list[str] = Field(default_factory=list, max_length=128)
 
 
 def dashboard_credentials_path(manager: RoomManager) -> Path:
@@ -196,6 +203,25 @@ def create_app(manager: RoomManager, *, admin_key: str,
             raise HTTPException(400, "Invalid room name or configuration source") from None
         # Gateway key is shown exactly once. It is never part of list/show API.
         return {"room": created["room"], "gateway_key": created["gateway_key"]}
+
+    @app.get("/api/rooms/{room_id}/mcp-tools",
+             dependencies=[Depends(authorize)])
+    def mcp_permissions(room_id: str):
+        try:
+            return manager.mcp_permissions(room_id)
+        except RoomError:
+            raise HTTPException(404, "Unknown room or invalid MCP configuration") from None
+
+    @app.post("/api/rooms/{room_id}/mcp-tools",
+              dependencies=[Depends(authorize), Depends(check_origin)])
+    def update_mcp_permissions(room_id: str, body: McpPermissionChange):
+        if body.mode == "original" and body.tools:
+            raise HTTPException(422, "Original mode cannot include custom tools")
+        tools = body.tools if body.mode == "custom" else None
+        try:
+            return manager.update_mcp_permissions(room_id, tools, runtime)
+        except RoomError:
+            raise HTTPException(409, "MCP tool selection invalid or room restart failed") from None
 
     @app.post("/api/rooms/{room_id}/start",
               dependencies=[Depends(authorize), Depends(check_origin)])
