@@ -50,6 +50,16 @@ def parser_for_rooms():
     gateway.add_argument("--port", type=int, default=18219)
     commands.add_parser("gateway-stop")
     commands.add_parser("gateway-status")
+    commands.add_parser("dashboard-build", help="Build original React/Vite Dashboard image")
+    dashboard = commands.add_parser("dashboard-start",
+                                     help="Start one private original Dashboard for all rooms")
+    dashboard.add_argument("--port", type=int, default=18217)
+    dashboard.add_argument("--public-origin", default="",
+                           help="HTTPS origin for an operator-configured TLS reverse proxy")
+    commands.add_parser("dashboard-status")
+    commands.add_parser("dashboard-stop")
+    commands.add_parser("bridge-address",
+                        help="Show private Docker bridge IP for host admin-serve")
     credentials = commands.add_parser(
         "web-auth", help="Configure Dashboard username and password (interactive)")
     credentials.add_argument("--username", default=None,
@@ -58,6 +68,8 @@ def parser_for_rooms():
     admin = commands.add_parser("admin-serve",
                                 help="Start the administrator dashboard on loopback only")
     admin.add_argument("--port", type=int, default=18220)
+    admin.add_argument("--docker-network", action="store_true",
+                       help="Bind administrator API only to installation's private Docker bridge")
     return parser
 
 
@@ -90,6 +102,20 @@ def main(argv=None):
     elif args.command == "gateway-status":
         manager.initialize()
         result = runtime.gateway_status(manager)
+    elif args.command == "dashboard-build":
+        runtime.build_dashboard(ROOT)
+        result = {"image": runtime.dashboard_image()}
+    elif args.command == "dashboard-start":
+        result = runtime.start_dashboard(manager, port=args.port,
+                                         public_origin=args.public_origin)
+    elif args.command == "dashboard-status":
+        manager.initialize()
+        result = runtime.dashboard_status(manager)
+    elif args.command == "dashboard-stop":
+        result = runtime.stop_dashboard(manager)
+    elif args.command == "bridge-address":
+        result = {"address": runtime.network_gateway_ip(manager),
+                  "network": manager.network}
     elif args.command == "web-auth":
         from serein.room_admin import save_dashboard_credentials
         username = args.username or input("Dashboard 登录用户名：").strip()
@@ -110,8 +136,9 @@ def main(argv=None):
             raise RoomError("Invalid administrator UI port")
         token = read_admin_key(manager)
         import uvicorn
+        address = runtime.network_gateway_ip(manager) if args.docker_network else "127.0.0.1"
         uvicorn.run(create_app(manager, admin_key=token, runtime=runtime),
-                    host="127.0.0.1", port=args.port, access_log=False)
+                    host=address, port=args.port, access_log=False)
         return 0
     elif args.command == "show":
         result = manager.get(args.room_id)
