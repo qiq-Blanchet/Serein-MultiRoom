@@ -452,6 +452,57 @@ class RoomManager:
             temp.unlink(missing_ok=True)
         return self.mcp_permissions(room_id)
 
+    def update_mcp_permissions(self, room_id: str, tools: list[str] | None,
+                               runtime: "DockerRuntime") -> dict:
+        """Apply per-room MCP tool selection; restart only the target room.
+
+        The original MCP server loads the static allowlist during startup.
+        No memory tables, other room containers, or core modules are changed.
+        """
+        room = self.get(room_id)
+        if room["state"] not in {"stopped", "ready"}:
+            raise RoomError("Room must be stopped or ready")
+        # Preflight all input before taking any room offline.
+        if tools is not None:
+            if (not isinstance(tools, list) or len(tools) > 128 or
+                    any(not isinstance(t, str) or not t or len(t) > 100 for t in tools)):
+                raise RoomError("Invalid MCP tool selection")
+            existing = self.mcp_permissions(room_id)
+            if set(tools) - (set(existing["available"]) | set(existing["tools"])):
+                raise RoomError("Unknown or currently unavailable MCP tool")
+        current = self.mcp_permissions(room_id)
+        if (tools is None and current["mode"] == "original") or (
+                tools is not None and current["mode"] == "custom" and
+                set(tools) == set(current["tools"])):
+            return {"room": room, "permissions": current, "restarted": False}
+
+        was_ready = room["state"] == "ready"
+        path = self.room_dir(room_id) / "config" / "config.toml"
+        previous_config = path.read_text(encoding="utf-8")
+        if was_ready:
+            self.stop(room_id, runtime)
+        try:
+            self.set_mcp_permissions(room_id, tools)
+            runtime.remove_stopped(self, self.get(room_id))
+            if was_ready:
+                self.start(room_id, runtime)
+        except Exception:
+            # Preserve the last known valid permission settings when a
+            # fresh container failed to start; leave the room unavailable
+            # rather than exposing an inconsistent list of MCP tools.
+            temp = path.parent / ("." + uuid4().hex + ".tmp")
+            try:
+                _private_text(temp, previous_config)
+                os.replace(temp, path)
+            finally:
+                temp.unlink(missing_ok=True)
+            raise
+        return {
+            "room": self.get(room_id),
+            "permissions": self.mcp_permissions(room_id),
+            "restarted": was_ready,
+        }
+
     def resolve_gateway_key(self, key: str) -> str | None:
         """For M2: map a verified high-entropy key to one room."""
         if not isinstance(key, str) or not key:
