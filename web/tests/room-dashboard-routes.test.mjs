@@ -179,3 +179,47 @@ test('room creation requires one creation-time ID but no duplicate room-name set
     assert.equal(JSON.parse(res.body).room.room_slug,'xiaogi-main');
   } finally {rmSync(root,{recursive:true,force:true});}
 });
+
+test('MCP editing is limited to the currently selected room and one web login', async () => {
+  const root=mkdtempSync(join(tmpdir(),'dashboard-mcp-')),path=join(root,'routes.json');
+  manifest(path,[A,B]);
+  const forwarded=[];
+  const handler=async (url,params)=>{
+    forwarded.push({url:String(url),method:params.method,body:params.body,
+                    bearer:params.headers.Authorization});
+    return new Response(JSON.stringify(params.method === 'GET'
+      ? {mode:'original',tools:[],available:['read_memory','recall_memory']}
+      : {permissions:{mode:'custom',tools:['read_memory']},restarted:true}),{status:200});
+  };
+  try {
+    const current=req('GET',undefined,{cookie:roomCookie(KEY,B)});
+    let response=capture();
+    await dashboardRoomEndpoint(current,response,{
+      ...options(path,handler),path:'/__serein/rooms/'+B+'/mcp-tools',
+    });
+    assert.equal(response.statusCode,200);
+    assert.equal(JSON.parse(response.body).mode,'original');
+
+    response=capture();
+    await dashboardRoomEndpoint(req('POST',{
+      mode:'custom',tools:['read_memory'],
+    },{cookie:roomCookie(KEY,B)}),response,{
+      ...options(path,handler),path:'/__serein/rooms/'+B+'/mcp-tools',
+    });
+    assert.equal(response.statusCode,200);
+    assert.equal(JSON.parse(response.body).restarted,true);
+
+    response=capture();
+    await dashboardRoomEndpoint(req('POST',{
+      mode:'custom',tools:['read_memory'],
+    },{cookie:roomCookie(KEY,B)}),response,{
+      ...options(path,handler),path:'/__serein/rooms/'+A+'/mcp-tools',
+    });
+    assert.equal(response.statusCode,403);
+    assert.equal(forwarded.length,2);
+    assert.ok(forwarded.every(row=>row.bearer==='Bearer '+KEY));
+    assert.ok(forwarded.every(row=>row.url.endsWith('/api/rooms/'+B+'/mcp-tools')));
+    assert.deepEqual(JSON.parse(forwarded[1].body),
+                     {mode:'custom',tools:['read_memory']});
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
