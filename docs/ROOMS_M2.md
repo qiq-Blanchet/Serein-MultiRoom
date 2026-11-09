@@ -10,7 +10,7 @@
 - 只有处于 `ready` 的房间进入动态路由清单，停止房间立即撤销对外 Key 的使用资格。列表、日志和网页不显示内部 token。
 - 网关仅可读取私有的 `control/gateway/routes.json` 机密路由清单，不挂载任何房间的数据库、索引、备份、梦境、日记或备忘文件。这个机密清单包含房间 ID、外部 Key 摘要和房间内部 Serein Bearer Token，必须严格保护，永远不要提交到 Git。
 - 每房间核心服务仍使用自己单独的内部 token，且不发布宿主机端口。网关以 `http://room-<id>:8011` 为**服务端生成**的内部目标，不接受用户指定上游 URL。
-- 客户端伪造 `X-Serein-Room-ID` 或请求体顶层/`serein.room_id` 时，若与 Key 所属房间不一致则拒绝。客户端 `X-Serein-Window-ID` 仍可在**自己的房间内**标识窗口。
+- 客户端伪造 `X-Serein-Room-ID` 或请求体顶层/`serein.room_id` 时，若与 Key 所属房间不一致则拒绝。各 AI 使用独一无二的创建时房间 ID 作为自定义请求 `X-Serein-Window-ID`（如 `xiaogi-main`）；若这个请求头与已验证 Gateway Key 的房间 ID 不一致，网关直接拒绝 403，不能只靠修改请求头选房。旧客户端不传该头时保持按 Gateway Key 鉴权路由。
 - MCP 使用静态 Bearer；保持会话 ID 和事件流，并对浏览器 Origin 做同源校验。MCP OAuth 授权、注册、token 等入口**故意不对外开放**，待 M5 完成独立 audience/resource 绑定后接通。不能用本版本声称 OAuth 多房间已经可用。
 - M2 公共网关禁止访问 `/v1/settings` 等管理接口，也不提供管理网站。M3 才增加有管理员身份验证的网页与房间切换入口。
 
