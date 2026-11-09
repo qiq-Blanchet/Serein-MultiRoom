@@ -641,5 +641,11 @@
   "web/src/storage/roomScopedStorage.js",
   "web/tests/room-session.test.mjs",
   "web/tests/room-dashboard-routes.test.mjs",
-  "docs/ROOMS_M3_PHASE2.md"
+  "docs/ROOMS_M3_PHASE2.md",
+  "docs/ROOMS_M3_PHASE3.md",
+  "tests/test_dashboard_deployment.py",
+  "tests/test_room_manager.py",
+  "tests/test_room_gateway.py",
+  "tests/test_room_admin.py",
+  "tests/test_anthropic_thinking_usage.py"
 ]
