@@ -105,7 +105,7 @@ export async function dashboardRoomEndpoint(req, res, {
     const base = new URL(adminURL);
     if (base.username || base.password || base.pathname !== '/' || base.search || base.hash
         || base.protocol !== 'http:'
-        || !['localhost','127.0.0.1','[::1]','serein-room-admin'].includes(base.hostname)) {
+        || !['localhost','127.0.0.1','[::1]','serein-room-admin','host.docker.internal'].includes(base.hostname)) {
       throw Error('Invalid private administrator service URL');
     }
     const response = await fetchImpl(new URL('/api/rooms', base), {
