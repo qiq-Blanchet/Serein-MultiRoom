@@ -4,6 +4,7 @@
 No existing single-instance installation is discovered or modified.
 """
 import argparse
+import getpass
 import json
 import os
 from pathlib import Path
@@ -49,6 +50,10 @@ def parser_for_rooms():
     gateway.add_argument("--port", type=int, default=18219)
     commands.add_parser("gateway-stop")
     commands.add_parser("gateway-status")
+    credentials = commands.add_parser(
+        "web-auth", help="Configure Dashboard username and password (interactive)")
+    credentials.add_argument("--username", default=None,
+                             help="Your preferred Dashboard username; password is prompted securely")
     commands.add_parser("admin-init", help="Generate an independent private administrator key")
     admin = commands.add_parser("admin-serve",
                                 help="Start the administrator dashboard on loopback only")
@@ -85,6 +90,15 @@ def main(argv=None):
     elif args.command == "gateway-status":
         manager.initialize()
         result = runtime.gateway_status(manager)
+    elif args.command == "web-auth":
+        from serein.room_admin import save_dashboard_credentials
+        username = args.username or input("Dashboard 登录用户名：").strip()
+        password = getpass.getpass("Dashboard 登录密码（至少 10 字符）：")
+        if getpass.getpass("再输入一遍密码：") != password:
+            raise RoomError("The two passwords do not match")
+        path = save_dashboard_credentials(manager, username, password)
+        result = {"web_auth_file": str(path),
+                  "message": "Dashboard account updated; no password or key printed"}
     elif args.command == "admin-init":
         from serein.room_admin import initialize_admin_key
         secret = initialize_admin_key(manager)
