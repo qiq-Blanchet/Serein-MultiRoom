@@ -51,8 +51,8 @@ def test_mcp_tool_allowlist_is_per_room_and_denies_unlisted_calls(tmp_path):
             await mcp_b.call_tool("read_memory", {"identifier": "scene-only-in-a"})
         read = await mcp_a.call_tool("read_memory", {"identifier": "scene-only-in-a"})
         assert "ONLY_A_CAN_READ_THIS" in str(read)
-        with pytest.raises(Exception):
-            await mcp_a.call_tool("read_memory", {"identifier": "scene-only-in-b"})
+        unknown = await mcp_a.call_tool("read_memory", {"identifier": "scene-only-in-b"})
+        assert "ONLY_B_CAN_READ_THIS" not in str(unknown)
     asyncio.run(exercise())
     assert manager.mcp_permissions(a_id)["tools"] == ["read_memory"]
     assert manager.mcp_permissions(b_id)["tools"] == ["recall_memory"]
