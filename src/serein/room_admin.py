@@ -144,6 +144,19 @@ def create_app(manager: RoomManager, *, admin_key: str,
 
     def snapshot_room(room: dict):
         result = dict(room)
+        # No second room naming setting. The name shown in the switcher is
+        # the existing Serein Appearance -> AI name, when customized.
+        # New rooms display their chosen room ID until Appearance is edited.
+        result["display_name"] = room.get("room_slug") or room["name"]
+        try:
+            from .deployment import read_settings
+            data = manager.room_dir(room["room_id"]) / "data" / "serein.db"
+            identity = read_settings(data).get("identity") or {}
+            ai_name = identity.get("ai_name")
+            if isinstance(ai_name, str) and ai_name.strip() and ai_name.strip() != "AI":
+                result["display_name"] = ai_name.strip()
+        except (RoomError, OSError, KeyError, ValueError):
+            pass
         try:
             result["docker"] = runtime.status(manager, room)
         except (RoomError, OSError):
