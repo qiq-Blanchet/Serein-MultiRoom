@@ -214,3 +214,28 @@ def test_cli_admin_init_never_prints_admin_secret(tmp_path):
     assert json.loads(one.stdout)["admin_key_file"] == str(expected)
     assert json.loads(two.stdout)["admin_key_file"] == str(expected)
     assert "room Gateway Key" in one.stdout
+
+
+def test_room_id_creation_uses_existing_appearance_ai_name(console):
+    client, manager, key, _, _ = console
+    response = client.post("/api/rooms", headers=auth(key), json={
+        "name": "xiaogi-main", "room_slug": "xiaogi-main", "source": "blank",
+    })
+    assert response.status_code == 201, response.text
+    room = response.json()["room"]
+    assert room["room_slug"] == "xiaogi-main"
+    assert response.json()["gateway_key"]
+    uuid = room["room_id"]
+    listings = client.get("/api/rooms", headers=auth(key)).json()["rooms"]
+    assert listings[0]["display_name"] == "xiaogi-main"
+    db = manager.room_dir(uuid) / "data" / "serein.db"
+    save_settings(db, {"identity": {"ai_name": "小玑"}})
+    listings = client.get("/api/rooms", headers=auth(key)).json()["rooms"]
+    assert listings[0]["display_name"] == "小玑"
+    assert listings[0]["room_slug"] == "xiaogi-main"
+    assert "gateway_key" not in listings[0]
+    duplicate = client.post("/api/rooms", headers=auth(key), json={
+        "name": "Another AI", "room_slug": "xiaogi-main", "source": "blank",
+    })
+    assert duplicate.status_code == 400
+    assert len(manager.list_rooms()) == 1
