@@ -115,6 +115,17 @@ def create_app(routes_file: Path, *, transport=None) -> FastAPI:
         if requested_room and requested_room not in accepted_ids:
             return _json_error(403, "Room identity mismatch")
 
+        # For Chat, a supplied X-Serein-Window-ID must agree with the
+        # Gateway-Key-bound room identity. Without this check the same
+        # Window ID could accidentally be used for two different AI rooms,
+        # even though the key itself prevents cross-database routing.
+        # Do not require this optional header on legacy clients or non-Chat
+        # endpoints; the original core's no-header behavior is preserved.
+        if path == "/v1/chat/completions":
+            requested_window = request.headers.get("x-serein-window-id")
+            if requested_window is not None and requested_window not in accepted_ids:
+                return _json_error(403, "Window ID does not match Gateway Key room")
+
         # MCP browser callers require same-origin. OAuth is NOT transparently
         # proxied, because room-specific resource/audience is not yet in place.
         if path in MCP_PATHS and request.headers.get("origin"):
