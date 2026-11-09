@@ -106,10 +106,39 @@ def test_mcp_allowlist_config_is_cloned_without_private_data(tmp_path):
     config = manager.room_dir(source) / "config" / "config.toml"
     config.write_text(config.read_text() + "\n# Synthetic permitted tool\n", encoding="utf-8")
     current = config.read_text()
-    config.write_text(current.replace("tools = []", 'tools = ["read_memory"]'), encoding="utf-8")
+    config.write_text(current + '\n[mcp]\ntools = ["read_memory"]\n', encoding="utf-8")
     target = manager.create("Target")["room"]["room_id"]
     with (manager.room_dir(target) / "config" / "config.toml").open("rb") as file:
         assert tomllib.load(file)["mcp"]["tools"] == ["read_memory"]
+
+
+def test_new_rooms_keep_original_mcp_defaults_and_clone_explicit_permissions(tmp_path):
+    manager = RoomManager(tmp_path / "rooms-root")
+    first = manager.create("First", source="blank")["room"]["room_id"]
+    path = manager.room_dir(first) / "config" / "config.toml"
+    with path.open("rb") as file:
+        config = tomllib.load(file)
+    assert "tools" not in config.get("mcp", {})
+    original = manager.mcp_permissions(first)
+    assert original["mode"] == "original"
+    assert "read_memory" in original["available"]
+
+    cloned = manager.create("Cloned")["room"]["room_id"]
+    assert manager.mcp_permissions(cloned)["mode"] == "original"
+    with pytest.raises(RoomError):
+        manager.set_mcp_permissions(first, ["invalid_tool_name"])
+
+    manager.set_mcp_permissions(first, ["read_memory"])
+    restricted = manager.mcp_permissions(first)
+    assert restricted["mode"] == "custom" and restricted["tools"] == ["read_memory"]
+    copied = manager.create("Restricted copy", source=first)["room"]["room_id"]
+    assert manager.mcp_permissions(copied)["tools"] == ["read_memory"]
+    assert manager.mcp_permissions(cloned)["mode"] == "original"
+    manager.set_mcp_permissions(first, None)
+    assert manager.mcp_permissions(first)["mode"] == "original"
+    manager.set_mcp_permissions(first, [])
+    assert manager.mcp_permissions(first)["mode"] == "custom"
+    assert manager.mcp_permissions(first)["tools"] == []
 
 
 def test_reject_unknown_ids_and_paths(tmp_path):
