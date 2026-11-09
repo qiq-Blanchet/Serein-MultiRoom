@@ -7,6 +7,7 @@ export function RoomSwitcher({ rooms, currentRoomId, onSelect, onCreate, onActio
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
+  const [roomIdInput, setRoomIdInput] = useState("");
   const [source, setSource] = useState("first");
   const [reuseKeys, setReuseKeys] = useState(false);
   const [key, setKey] = useState("");
@@ -58,10 +59,12 @@ export function RoomSwitcher({ rooms, currentRoomId, onSelect, onCreate, onActio
               event.preventDefault();
               invoke(async () => {
                 const result = await onCreate({
-                  name: name.trim(), source, reuse_provider_keys: reuseKeys,
+                  name: name.trim(), room_slug: roomIdInput.trim(), source,
+                  reuse_provider_keys: reuseKeys,
                 });
                 setKey(result.gateway_key || "");
                 setName("");
+                setRoomIdInput("");
                 setSource("first");
                 setReuseKeys(false);
                 setAdding(false);
@@ -69,6 +72,10 @@ export function RoomSwitcher({ rooms, currentRoomId, onSelect, onCreate, onActio
             }}>
               <input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)}
                 placeholder="房间名称" aria-label="房间名称" />
+              <input required minLength={3} maxLength={48}
+                pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*"
+                value={roomIdInput} onChange={(event) => setRoomIdInput(event.target.value)}
+                placeholder="房间 ID：xiaogi-main" aria-label="房间 ID" />
               <select value={source} aria-label="新房间配置来源" onChange={(event) => setSource(event.target.value)}>
                 <option value="first">首房功能配置</option>
                 <option value="blank">完全空白</option>
@@ -78,7 +85,7 @@ export function RoomSwitcher({ rooms, currentRoomId, onSelect, onCreate, onActio
                 <input type="checkbox" checked={reuseKeys}
                   onChange={(event) => setReuseKeys(event.target.checked)}/> 复用模型密钥
               </label>
-              <button type="submit" disabled={busy || !name.trim()}>创建</button>
+              <button type="submit" disabled={busy || !name.trim() || !roomIdInput.trim()}>创建</button>
             </form>
           )}
           {key && (
