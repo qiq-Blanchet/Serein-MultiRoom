@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { preview } from 'vite';
 import { requireWebAuth } from './webAuth.mjs';
-import { effectiveRoom, readyRooms, signedPreviewRoom } from './roomSession.mjs';
+import { effectiveRoom, readyRooms, signedPreviewRoom, selectedRoom } from './roomSession.mjs';
 import { dashboardRoomEndpoint } from './roomDashboardRoutes.mjs';
 
 // Legacy deployments continue to use their original single-room settings.
@@ -95,7 +95,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(401); res.end('Bearer token required'); return;
   }
   if (multiRoom && path.startsWith('/__serein/rooms')
-      && (['/__serein/rooms','/__serein/rooms/select','/__serein/rooms/current'].includes(path)
+      && (['/__serein/rooms','/__serein/rooms/select','/__serein/rooms/reset','/__serein/rooms/current'].includes(path)
           || /^\/__serein\/rooms\/[a-f0-9]{32}\/(start|stop|mcp-tools)$/.test(path)
           || /^\/__serein\/rooms\/[a-f0-9]{32}\/backups(?:\/\d{8}T\d{6}Z-[a-f0-9]{12}\.tar\.gz\/(preview|download))?$/.test(path))) {
     void dashboardRoomEndpoint(req, res, {
@@ -109,9 +109,32 @@ const server = http.createServer((req, res) => {
   const target = backend ? core : new URL(`http://127.0.0.1:${process.env.SEREIN_PREVIEW_PORT || 4173}`);
   const headers = { ...req.headers, host: backend ? target.host : req.headers.host };
   if (multiRoom && !backend) {
-    const current = effectiveRoom(req.headers.cookie, adminKey,
-      readyRooms(process.env.SEREIN_MULTIROOM_ROUTES_FILE));
-    if (!current) { res.writeHead(503); res.end('No ready room'); return; }
+    const ready = readyRooms(process.env.SEREIN_MULTIROOM_ROUTES_FILE);
+    const current = effectiveRoom(req.headers.cookie, adminKey, ready);
+    if (!current) {
+      // A stopped/paused room must not silently show a different AI's data.
+      // If the signed room cookie is stale, serve a tiny self-contained
+      // recovery page without loading *any* other room's backend state.
+      const chosen = selectedRoom(req.headers.cookie, adminKey);
+      if (chosen && req.method === 'GET' && (path === '/' || path === '/index.html')) {
+        res.writeHead(503, {
+          'Content-Type':'text/html; charset=utf-8', 'Cache-Control':'no-store',
+          'X-Content-Type-Options':'nosniff',
+        });
+        res.end(`<!doctype html><html lang="zh-CN"><meta charset="UTF-8"><title>Serein 房间已暂停</title>
+<style>body{max-width:450px;margin:14vh auto;padding:28px;font:16px/1.7 system-ui;color:#3f6257}
+button{background:#e9f1ed;border:1px solid #9cb8ad;border-radius:7px;padding:10px;cursor:pointer}</style>
+<h2>当前 AI 房间暂时未运行</h2><p>可能正在备份或重启。这里不会自动切到其他 AI 的记忆库。
+可以稍后刷新；若要改看其他已启动的房间，请手动取消旧房间选择。</p>
+<button onclick="resetRoom()">选择其他可用房间</button>
+<script>async function resetRoom(){const r=await fetch("/__serein/rooms/reset",{method:"POST",
+credentials:"same-origin",headers:{"Content-Type":"application/json"},body:"{}"});
+if(r.ok)location.href="/";else alert("无法切换房间，请重新登录后再试");}</script></html>`);
+        return;
+      }
+      res.writeHead(503, {'Cache-Control':'no-store'});
+      res.end('Selected room unavailable; no cross-room fallback'); return;
+    }
     // Browser cannot supply or override the internal room context.
     for (const name of Object.keys(headers)) {
       if (name.startsWith('x-serein-verified-') || name.startsWith('x-forwarded-'))
