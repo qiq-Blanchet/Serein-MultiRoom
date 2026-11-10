@@ -279,17 +279,23 @@ def restore_room_backup(manager, room_id, name, runtime, *,
                         raise RoomError("Unsafe target directory for restore")
                     os.replace(active, previous)
                     os.replace(staged / scope, active)
+                # The archive must still match the confirmed digest when
+                # staging is complete; a concurrent file replacement cannot
+                # be accepted merely because the first preflight passed.
+                if _hash_file(archive_path) != expected_sha256:
+                    raise RoomError("Backup changed during restore staging")
                 # Force Docker to re-evaluate the same private volume paths;
                 # do not remove its actual host data, old keys or backups.
                 runtime.remove_stopped(manager, manager.get(room_id))
                 if was_ready:
                     manager.start(room_id, runtime, _restore_in_progress=True)
                 committed = True
-                # After the service is healthy, drop old directory shells.
-                # Rollback .tar.gz stays permanently available.
+                # Mark a successful restore BEFORE cleaning previous shells.
+                # If the VPS crashes after this point the current data is
+                # already healthy, and the permanent rollback archive exists.
+                journal.unlink()
                 for scope in _SCOPE:
                     _remove_tree(home / (".restore-previous-" + tag + "-" + scope))
-                journal.unlink()
                 return {
                     "room_id": room_id, "room_slug": room["room_slug"],
                     "source_room_id": plan["source_room_id"],
