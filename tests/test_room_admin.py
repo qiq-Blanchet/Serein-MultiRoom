@@ -327,7 +327,7 @@ def test_full_room_backup_web_admin_api_is_room_scoped_and_does_not_show_keys(co
     assert preview.json()["restore_available"] is False
     downloaded = client.get(endpoint + "/" + filename + "/download", headers=auth(key))
     assert downloaded.status_code == 200, downloaded.text[:160]
-    assert downloaded.content[:2] == b"\\x1f\\x8b"
+    assert downloaded.content[:2] == b"\x1f\x8b"
     assert filename in downloaded.headers["content-disposition"]
     assert "gateway_key" not in downloaded.headers["content-disposition"]
 
