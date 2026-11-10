@@ -283,7 +283,7 @@ def restore_room_backup(manager, room_id, name, runtime, *,
                 # do not remove its actual host data, old keys or backups.
                 runtime.remove_stopped(manager, manager.get(room_id))
                 if was_ready:
-                    manager.start(room_id, runtime)
+                    manager.start(room_id, runtime, _restore_in_progress=True)
                 committed = True
                 # After the service is healthy, drop old directory shells.
                 # Rollback .tar.gz stays permanently available.
