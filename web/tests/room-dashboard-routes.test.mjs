@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Readable } from 'node:stream';
+import { Readable, Writable } from 'node:stream';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -222,4 +222,90 @@ test('MCP editing is limited to the currently selected room and one web login', 
     assert.deepEqual(JSON.parse(forwarded[1].body),
                      {mode:'custom',tools:['read_memory']});
   } finally {rmSync(root,{recursive:true,force:true});}
+});
+
+test('full-room archive operations require same selected AI and stale-tab marker', async () => {
+  const root=mkdtempSync(join(tmpdir(),'dashboard-archive-')),path=join(root,'routes.json');
+  manifest(path,[A,B]);
+  const name='20261110T140000Z-aabbccddeeff.tar.gz';
+  const calls=[];
+  const handler=async (url,params)=>{
+    calls.push({url:String(url),method:params.method,headers:params.headers,
+                body:params.body});
+    if(String(url).endsWith('/preview'))
+      return new Response(JSON.stringify({verified:true,room_id:A,files:7}),{status:200});
+    if(params.method==='POST')
+      return new Response(JSON.stringify({room_id:A,name,restarted:true}),{status:201});
+    return new Response(JSON.stringify({room_id:A,items:[{name,bytes:1234}]}),{status:200});
+  };
+  const base=options(path,handler);
+  const headers={cookie:roomCookie(KEY,A),'x-serein-target-room':A};
+  try{
+    let res=capture();
+    await dashboardRoomEndpoint(req('GET',undefined,headers),res,{
+      ...base,path:'/__serein/rooms/'+A+'/backups'});
+    assert.equal(res.statusCode,200);
+    assert.equal(JSON.parse(res.body).items[0].name,name);
+
+    res=capture();
+    await dashboardRoomEndpoint(req('POST',{},headers),res,{
+      ...base,path:'/__serein/rooms/'+A+'/backups'});
+    assert.equal(res.statusCode,201);
+    assert.equal(JSON.parse(res.body).restarted,true);
+
+    res=capture();
+    await dashboardRoomEndpoint(req('GET',undefined,headers),res,{
+      ...base,path:'/__serein/rooms/'+A+'/backups/'+name+'/preview'});
+    assert.equal(res.statusCode,200);
+    assert.equal(JSON.parse(res.body).verified,true);
+
+    for(const bad of [
+      {cookie:roomCookie(KEY,B),'x-serein-target-room':A},
+      {cookie:roomCookie(KEY,A),'x-serein-target-room':B},
+      {cookie:roomCookie(KEY,A)},
+    ]){
+      res=capture();
+      await dashboardRoomEndpoint(req('POST',{},bad),res,{
+        ...base,path:'/__serein/rooms/'+A+'/backups'});
+      assert.equal(res.statusCode,409);
+    }
+    assert.equal(calls.length,3);
+    assert.ok(calls.every(item=>item.headers.Authorization==='Bearer '+KEY));
+    assert.ok(calls.every(item=>item.url.includes('/api/rooms/'+A+'/backups')));
+    assert.equal(calls[1].body,'{}');
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('browser-streamed full archive is named for the signed current room', async () => {
+  const root=mkdtempSync(join(tmpdir(),'dashboard-archive-stream-')),path=join(root,'routes.json');
+  manifest(path,[A,B]);
+  const name='20261110T140000Z-aabbccddeeff.tar.gz';
+  const bytes=Buffer.from('SYNTHETIC_BINARY_ROOM_A');
+  let selectedFetchCount=0;
+  const handler=async (url,params)=>{
+    selectedFetchCount++;
+    assert.equal(params.headers.Authorization,'Bearer '+KEY);
+    assert.ok(String(url).includes('/api/rooms/'+A+'/backups/'+name+'/download'));
+    return new Response(bytes,{status:200,headers:{'Content-Length':String(bytes.length)}});
+  };
+  class CapturedWritable extends Writable {
+    constructor(){super();this.statusCode=0;this.headers={};this.data=[];}
+    writeHead(code,headers){this.statusCode=code;this.headers=headers;this.headersSent=true;}
+    _write(chunk,enc,done){this.data.push(Buffer.from(chunk));done();}
+  }
+  try{
+    const out=new CapturedWritable();
+    await dashboardRoomEndpoint(req('GET',undefined,{cookie:roomCookie(KEY,A)}),out,{
+      ...options(path,handler),
+      path:'/__serein/rooms/'+A+'/backups/'+name+'/download'});
+    assert.equal(out.statusCode,200);
+    assert.match(out.headers['Content-Disposition'],new RegExp('serein-a{32}-'+name.replaceAll('.','\\.')));
+    assert.deepEqual(Buffer.concat(out.data),bytes);
+    const res=capture();
+    await dashboardRoomEndpoint(req('GET',undefined,{cookie:roomCookie(KEY,B)}),res,{
+      ...options(path,handler),
+      path:'/__serein/rooms/'+A+'/backups/'+name+'/download'});
+    assert.equal(res.statusCode,409);
+    assert.equal(selectedFetchCount,1);
+  }finally{rmSync(root,{recursive:true,force:true});}
 });
