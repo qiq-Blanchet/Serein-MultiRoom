@@ -41,7 +41,8 @@ export function roomContextPlugin({env = process.env} = {}) {
         return;
       }
       const room = { base: 'http://room-' + roomId + ':8011',
-                     token: route.internal_token, roomId };
+                     token: route.internal_token, roomId,
+                     roomSlug:route.room_slug || roomId };
       context.run(room, () => next());
     });
   }
@@ -73,13 +74,10 @@ export function requireRoomMatch(request, response, env = process.env) {
   return false;
 }
 
-export function currentRoomSlug(env = process.env) {
-  const id = currentRoomId();
-  if (!id || !env.SEREIN_MULTIROOM_ROUTES_FILE) return null;
-  // Always derive metadata from the server's ready manifest, never a
-  // client-supplied filename or query parameter.
-  return readyRooms(env.SEREIN_MULTIROOM_ROUTES_FILE)
-    .find(room => room.room_id === id)?.room_slug || id;
+export function currentRoomSlug() {
+  // Derived from the already-verified room route and frozen per request.
+  // Never use the URL or request headers as a source of backup identity.
+  return context.getStore()?.roomSlug || null;
 }
 
 export function roomBackupBasename() {
