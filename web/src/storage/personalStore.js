@@ -1,4 +1,4 @@
-import { roomLocalStorage } from "./roomScopedStorage.js";
+import { roomLocalStorage, roomTargetHeaders } from "./roomScopedStorage.js";
 // Canonical personal records; old browser data is imported without overwriting newer server state.
 const records = new Map();
 let ready;
@@ -11,7 +11,8 @@ const read = (key, fallback) => { try { return JSON.parse(roomLocalStorage().get
 async function request(path, body) {
   const response = await fetch(`/__serein/personal${path}`, {
     method: body === undefined ? "GET" : "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json",
+      ...(path==="/import"?roomTargetHeaders():{}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const result = await response.json();
