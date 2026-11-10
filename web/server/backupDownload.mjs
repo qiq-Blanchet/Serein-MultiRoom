@@ -1,4 +1,4 @@
-import { backendFor } from './roomContext.mjs';
+import { backendFor, requireRoomMatch, roomBackupBasename } from './roomContext.mjs';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
@@ -7,6 +7,7 @@ export async function backupDownload(request, response) {
   if (request.method !== 'GET') {
     response.statusCode = 405; response.end(); return;
   }
+  if (!requireRoomMatch(request, response)) return;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1_200_000);
   const disconnect = () => { if (!response.writableEnded) controller.abort(); };
@@ -20,7 +21,8 @@ export async function backupDownload(request, response) {
     response.statusCode = result.status;
     response.setHeader('Content-Type', result.ok ? 'application/octet-stream' : 'application/json; charset=utf-8');
     if (result.ok) {
-      response.setHeader('Content-Disposition', 'attachment; filename="serein-backup.db"');
+      response.setHeader('Content-Disposition',
+        'attachment; filename="' + roomBackupBasename() + '-backup.db"');
       const length = result.headers.get('Content-Length');
       if (length) response.setHeader('Content-Length', length);
     }
