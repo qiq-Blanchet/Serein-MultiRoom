@@ -152,7 +152,7 @@ function parseMcpEvent(text) {
 }
 
 import { sereinConfigured, sereinBackendTimedOut, callSereinBackend, callSereinTool } from './server/sereinBackend.mjs';
-import { roomContextPlugin, backendFor, currentRoomId } from './server/roomContext.mjs';
+import { roomContextPlugin, backendFor, currentRoomId, requireRoomMatch, roomBackupBasename } from './server/roomContext.mjs';
 
 async function callSereinDashboard(path, options = {}) { return callSereinBackend(path, options); }
 
@@ -713,20 +713,29 @@ function sereinMemoryBridge() {
       eventMailboxBridge(server, callSereinBackend, readJsonBody);
       server.middlewares.use("/__serein/export/markdown", async (request,response)=>{
         if(request.method!=="GET"){response.statusCode=405;response.end();return;}
+        if(!requireRoomMatch(request,response))return;
+        const url=new URL(request.url||"/","http://localhost");
+        const kind=url.searchParams.get("kind")||"all";
+        if(!["all","scene","event"].includes(kind) ||
+          [...url.searchParams.keys()].some(key=>key!=="kind")){
+          response.statusCode=400;response.end("Invalid export category");return;
+        }
         try {
           const base=backendFor().base;
           const token=backendFor().token;
           if(!base || !token)throw new Error("backend_not_configured");
-          const result=await fetch(base.replace(/\/$/,"")+"/v1/export/markdown",{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(60_000)});
+          const result=await fetch(base.replace(/\/$/,"")+"/v1/export/markdown?kind="+encodeURIComponent(kind),{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(60_000)});
           response.statusCode=result.status;
           response.setHeader("Cache-Control","no-store");
           response.setHeader("Content-Type",result.ok?"application/zip":"application/json");
-          if(result.ok)response.setHeader("Content-Disposition",'attachment; filename="serein-memories.zip"');
+          if(result.ok)response.setHeader("Content-Disposition",
+            'attachment; filename="'+roomBackupBasename()+'-'+(kind==="all"?"scene-event":kind)+'.zip"');
           response.end(Buffer.from(await result.arrayBuffer()));
         } catch {response.statusCode=502;response.end("Export unavailable");}
       });
       server.middlewares.use("/__serein/export/backup", backupDownload);
       server.middlewares.use("/__serein/migration", async (request,response)=>{
+        if(!requireRoomMatch(request,response))return;
         response.setHeader("Cache-Control","no-store");
         const path=new URL(request.url,"http://localhost").pathname;
         if(request.method==="GET" && /^\/[0-9a-f]{64}\/export$/.test(path)){
@@ -830,6 +839,7 @@ function sereinMemoryBridge() {
         } catch {response.statusCode=502;response.end(JSON.stringify({error:"pipeline_unavailable"}));}
       });
       server.middlewares.use("/__serein/imports", async (request,response)=>{
+        if(!requireRoomMatch(request,response))return;
         response.setHeader("Content-Type","application/json; charset=utf-8");
         response.setHeader("Cache-Control","no-store");
         const path=request.url?.split("?")[0] || "/";
