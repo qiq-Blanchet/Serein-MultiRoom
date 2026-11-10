@@ -322,7 +322,7 @@ test('browser-streamed full archive is named for the signed current room', async
       ...options(path,handler),
       path:'/__serein/rooms/'+A+'/backups/'+name+'/download'});
     assert.equal(out.statusCode,200);
-    assert.match(out.headers['Content-Disposition'],new RegExp('serein-a{32}-'+name.replaceAll('.','\\.')));
+    assert.match(out.headers['Content-Disposition'],new RegExp('serein-xiaogi-main-'+name.replaceAll('.','\\.')));
     assert.deepEqual(Buffer.concat(out.data),bytes);
     const res=capture();
     await dashboardRoomEndpoint(req('GET',undefined,{cookie:roomCookie(KEY,B)}),res,{
