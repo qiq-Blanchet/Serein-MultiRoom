@@ -36,6 +36,14 @@ class CreateRoom(BaseModel):
     reuse_provider_keys: bool = False
 
 
+class RestoreRoomBackup(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    confirm_room_id: str = Field(min_length=3, max_length=48,
+        pattern=r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+    expected_sha256: str = Field(min_length=64, max_length=64,
+        pattern=r"^[a-f0-9]{64}$")
+
+
 class McpPermissionChange(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     mode: Literal["original", "custom"]
@@ -232,6 +240,38 @@ def create_app(manager: RoomManager, *, admin_key: str,
             return preview_room_backup(manager, room_id, name)
         except RoomError:
             raise HTTPException(409, "Backup is missing, damaged, or not this room's archive") from None
+
+    @app.get("/api/rooms/{room_id}/backups/{name}/restore-plan",
+             dependencies=[Depends(authorize)])
+    def restore_plan(room_id: str, name: str):
+        from .room_restore import plan_room_restore
+        try:
+            return plan_room_restore(manager, room_id, name)
+        except (RoomError, OSError):
+            raise HTTPException(409,
+                "Restore preflight failed: wrong room ID, damaged archive, or incompatible database") from None
+
+    @app.post("/api/rooms/{room_id}/backups/{name}/restore",
+              dependencies=[Depends(authorize), Depends(check_origin)])
+    def restore_archive(room_id: str, name: str, body: RestoreRoomBackup):
+        from .room_restore import restore_room_backup
+        try:
+            return restore_room_backup(manager, room_id, name, runtime,
+                                       confirm_slug=body.confirm_room_id,
+                                       expected_sha256=body.expected_sha256)
+        except (RoomError, OSError):
+            raise HTTPException(409,
+                "Restore not completed: verify room ID, schema and rollback status") from None
+
+    @app.post("/api/rooms/{room_id}/restore-recover",
+              dependencies=[Depends(authorize), Depends(check_origin)])
+    def recover_interrupted_restore(room_id: str):
+        from .room_restore import recover_room_restore
+        try:
+            return recover_room_restore(manager, room_id, runtime)
+        except (RoomError, OSError):
+            raise HTTPException(409,
+                "Room recovery requires administrator inspection") from None
 
     @app.get("/api/rooms/{room_id}/backups/{name}/download",
              dependencies=[Depends(authorize)])
