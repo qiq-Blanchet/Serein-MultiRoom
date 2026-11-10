@@ -22,7 +22,8 @@ function capture() {
 }
 function manifest(path, ids=[A]) {
   writeFileSync(path,JSON.stringify({version:1,rooms:ids.map(id=>({
-    room_id:id,gateway_key_sha256:id.slice(0,1).repeat(64),internal_token:'s'.repeat(40),
+    room_id:id,room_slug:id===A?'xiaogi-main':'other-main',
+    gateway_key_sha256:id.slice(0,1).repeat(64),internal_token:'s'.repeat(40),
   }))}));
 }
 function options(path, fetchImpl) {
@@ -371,7 +372,7 @@ test('room restore through Dashboard requires correct signed selected room and c
     for(const [headers,payload,status] of [
       [{cookie:roomCookie(KEY,B),'x-serein-target-room':A},
        {confirm_room_id:'xiaogi-main',expected_sha256:sha},409],
-      [validHeaders,{confirm_room_id:'other-main',expected_sha256:sha},200],
+      [validHeaders,{confirm_room_id:'other-main',expected_sha256:sha},409],
       [validHeaders,{confirm_room_id:'xiaogi-main',expected_sha256:'bad'},400],
       [validHeaders,{confirm_room_id:'xiaogi-main'},400],
     ]){
