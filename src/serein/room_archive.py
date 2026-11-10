@@ -110,10 +110,19 @@ def _write_archive(manager, room_id):
                           "sha256": _hash_file(source)}
                 content.append((record, source))
             key_digest = sha256((home / "secrets" / "gateway-key").read_bytes().strip()).hexdigest()
+            with sqlite3.connect(staged / "data" / "serein.db") as database:
+                db_user_version = database.execute("PRAGMA user_version").fetchone()[0]
+                schema_rows = database.execute(
+                    "SELECT name,type,sql FROM sqlite_master ORDER BY type,name"
+                ).fetchall()
+                schema_digest = sha256(json.dumps(
+                    schema_rows, ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")).hexdigest()
             manifest = {
                 "format": ARCHIVE_FORMAT, "room_id": room_id,
                 "room_slug": room["room_slug"], "created_at": datetime.now(timezone.utc).isoformat(),
                 "image": room["image"], "gateway_key_sha256": key_digest,
+                "sqlite_user_version": db_user_version, "sqlite_schema_sha256": schema_digest,
                 "includes_secrets": True,
                 "files": [record for record, _ in content],
             }
@@ -240,6 +249,8 @@ def preview_room_backup(manager, room_id, name):
         raise RoomError("Invalid or damaged room archive") from exc
     return {"name": name, "room_id": room_id, "room_slug": room["room_slug"],
             "created_at": manifest["created_at"], "image": manifest["image"],
+            "sqlite_user_version": manifest.get("sqlite_user_version"),
+            "sqlite_schema_sha256": manifest.get("sqlite_schema_sha256"),
             "files": len(entries), "total_uncompressed_bytes": total,
             "archive_sha256": _hash_file(path), "includes_secrets": True,
             "verified": True, "restore_available": False}
