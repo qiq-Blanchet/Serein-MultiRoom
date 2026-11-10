@@ -181,7 +181,13 @@ def create_room_backup(manager, room_id, runtime, *, pause_running=True):
                     manager.start(room_id, runtime)
             result["restarted"] = paused
             return result
+    except RoomError:
+        # RoomError itself derives from RuntimeError. Do not turn actual
+        # validation, SQLite or symlink failures into a false lock error.
+        raise
     except RuntimeError as exc:
+        if str(exc) != "已有任务运行，请不要双开。":
+            raise
         raise RoomError("Room backup is already running") from exc
 
 def room_backups(manager, room_id):
