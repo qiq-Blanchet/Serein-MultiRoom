@@ -53,3 +53,38 @@ export function roomContextPlugin({env = process.env} = {}) {
 export function currentRoomId() {
   return context.getStore()?.roomId ?? null;
 }
+
+/**
+ * An old browser tab must not submit an import to a newly selected room.
+ * The x-serein-target-room header is only a consistency check, never
+ * authentication or routing. The signed server room context stays authoritative.
+ */
+export function requireRoomMatch(request, response, env = process.env) {
+  if (!env.SEREIN_MULTIROOM_ROUTES_FILE) return true;
+  const expected = currentRoomId();
+  const requested = request.headers['x-serein-target-room'];
+  if (expected && typeof requested === 'string' && requested === expected) return true;
+  response.writeHead(409, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  response.end(JSON.stringify({detail: '当前房间已切换，请重新打开页面后再导入或导出。'}));
+  return false;
+}
+
+export function currentRoomSlug(env = process.env) {
+  const id = currentRoomId();
+  if (!id || !env.SEREIN_MULTIROOM_ROUTES_FILE) return null;
+  // Always derive metadata from the server's ready manifest, never a
+  // client-supplied filename or query parameter.
+  return readyRooms(env.SEREIN_MULTIROOM_ROUTES_FILE)
+    .find(room => room.room_id === id)?.room_slug || id;
+}
+
+export function roomBackupBasename() {
+  const slug = currentRoomSlug();
+  if (!slug) return 'serein';
+  const safe = slug.replace(/[^a-z0-9-]/g, '').slice(0,48);
+  return 'serein-' + (safe || currentRoomId());
+}
