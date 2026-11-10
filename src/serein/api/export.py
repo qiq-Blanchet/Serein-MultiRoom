@@ -4,6 +4,7 @@ import json
 import re
 import zipfile
 from ..core.store import digest
+from typing import Literal
 from fastapi import APIRouter
 from fastapi.responses import Response
 from ..core.reader import Reader
@@ -28,18 +29,20 @@ def database_snapshot(database):
         temporary.cleanup();raise
 
 
-def markdown_archive(database):
+def markdown_archive(database, kind: Literal['all', 'scene', 'event'] = 'all'):
+    if kind not in ('all', 'scene', 'event'):
+        raise ValueError('Invalid export category')
     output=io.BytesIO()
     with Reader(database) as reader, zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
         reader.store.conn.execute('BEGIN')
-        for kind in ('scene','event'):
-            archive.writestr(kind+'/',b'')
-            rows=reader.store.conn.execute('SELECT id FROM documents WHERE kind=? ORDER BY created_at,id',(kind,)).fetchall()
+        for selected_kind in (('scene','event') if kind == 'all' else (kind,)):
+            archive.writestr(selected_kind+'/',b'')
+            rows=reader.store.conn.execute('SELECT id FROM documents WHERE kind=? ORDER BY created_at,id',(selected_kind,)).fetchall()
             for row in rows:
                 result=reader.read(row['id'],with_evidence=False)
                 if not result['readable'] or not result.get('document'):continue
                 doc=result['document']
-                slug=re.sub(r'[^\w\-]+','_',doc['title'],flags=re.UNICODE).strip('._')[:70] or kind
+                slug=re.sub(r'[^\w\-]+','_',doc['title'],flags=re.UNICODE).strip('._')[:70] or selected_kind
                 safe_id=re.sub(r'[^A-Za-z0-9_-]','_',doc['id'])[:100]+'-'+digest(doc['id'])[:12]
                 # Original body stays intact below the portable metadata.
                 metadata={key:doc.get(key) for key in ('id','kind','title','revision','lifecycle','created_at','updated_at')}
@@ -53,7 +56,7 @@ def routes(settings,auth):
     @router.get('/v1/export/backup')
     def backup():return database_snapshot(settings.database)
     @router.get('/v1/export/markdown')
-    def download():
-        return Response(markdown_archive(settings.database),media_type='application/zip',
+    def download(kind: Literal['all', 'scene', 'event'] = 'all'):
+        return Response(markdown_archive(settings.database, kind),media_type='application/zip',
             headers={'Content-Disposition':'attachment; filename="serein-memories.zip"','Cache-Control':'no-store'})
     return router
