@@ -653,5 +653,8 @@
   "docs/ROOMS_M4_PHASE1.md",
   "docs/ROOMS_M5_BACKUP_IMPORT_PHASE1.md",
   "tests/test_room_import_export.py",
-  "web/tests/room-import-export.test.mjs"
+  "web/tests/room-import-export.test.mjs",
+  "src/serein/room_archive.py",
+  "tests/test_room_archive.py",
+  "docs/ROOMS_M5_FULL_ARCHIVES_PHASE2.md"
 ]
