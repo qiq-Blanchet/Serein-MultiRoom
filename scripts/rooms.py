@@ -47,6 +47,15 @@ def parser_for_rooms():
         item = commands.add_parser(command)
         item.add_argument("room_id")
     commands.choices["start"].add_argument("--wait", type=int, default=45)
+    for verb in ("backup", "backups", "backup-preview"):
+        cmd = commands.add_parser(verb, help={
+            "backup":"Create a private complete room archive; briefly pause only this room",
+            "backups":"List existing complete archives for one room",
+            "backup-preview":"Verify one room archive without restoring",
+        }[verb])
+        cmd.add_argument("room_id", help="Immutable room UUID, not another AI room")
+        if verb == "backup-preview":
+            cmd.add_argument("filename", help="Backup filename returned by backups")
     gateway = commands.add_parser("gateway-start",
                                   help="Start the shared Chat/MCP proxy bound to loopback")
     gateway.add_argument("--port", type=int, default=18219)
@@ -149,6 +158,15 @@ def main(argv=None):
         result = {**room, "docker": runtime.status(manager, room)}
     elif args.command == "start":
         result = manager.start(args.room_id, runtime, wait_seconds=args.wait)
+    elif args.command == "backup":
+        from serein.room_archive import create_room_backup
+        result = create_room_backup(manager, args.room_id, runtime)
+    elif args.command == "backups":
+        from serein.room_archive import room_backups
+        result = {"room_id": args.room_id, "items": room_backups(manager, args.room_id)}
+    elif args.command == "backup-preview":
+        from serein.room_archive import preview_room_backup
+        result = preview_room_backup(manager, args.room_id, args.filename)
     elif args.command == "stop":
         result = manager.stop(args.room_id, runtime)
     else:
