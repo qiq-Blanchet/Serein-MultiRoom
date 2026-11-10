@@ -74,7 +74,9 @@ def test_selective_markdown_export_only_current_room_and_requested_category(
         names=archive.namelist()
         folders={n for n in names if n.endswith("/")}
         assert folders==expected
-        texts="\n".join(archive.read(n).decode() for n in names if n.endswith(".md"))
+        files=[n for n in names if n.endswith(".md")]
+        assert files and all(n.split("/",1)[0]+"/" in expected for n in files)
+        texts="\n".join(archive.read(n).decode() for n in files)
         assert "_B" not in texts
         if kind!="event":assert "PRIVATE_SCENE_A" in texts
         else:assert "PRIVATE_SCENE_A" not in texts
