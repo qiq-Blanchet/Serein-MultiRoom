@@ -38,7 +38,10 @@ export function readyRooms(filename) {
 
 export function effectiveRoom(cookie, key, routes) {
   const chosen = selectedRoom(cookie, key);
-  return routes.find(row => row.room_id === chosen) || routes[0] || null;
+  // A signed selection for a now-paused room must NEVER silently choose
+  // another AI. Only visitors with no valid selection default to first ready.
+  if (chosen) return routes.find(row => row.room_id === chosen) || null;
+  return routes[0] || null;
 }
 
 export function signedPreviewRoom(roomId, key) {
