@@ -18,7 +18,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .room_docker import DockerRuntime
@@ -203,6 +203,47 @@ def create_app(manager: RoomManager, *, admin_key: str,
             raise HTTPException(400, "Invalid room name or configuration source") from None
         # Gateway key is shown exactly once. It is never part of list/show API.
         return {"room": created["room"], "gateway_key": created["gateway_key"]}
+
+    @app.get("/api/rooms/{room_id}/backups",
+             dependencies=[Depends(authorize)])
+    def list_room_backups(room_id: str):
+        from .room_archive import room_backups
+        try:
+            return {"room_id": manager.get(room_id)["room_id"],
+                    "items": room_backups(manager, room_id)}
+        except RoomError:
+            raise HTTPException(404, "Room backups unavailable") from None
+
+    @app.post("/api/rooms/{room_id}/backups",
+              dependencies=[Depends(authorize), Depends(check_origin)],
+              status_code=201)
+    def create_full_room_backup(room_id: str):
+        from .room_archive import create_room_backup
+        try:
+            return create_room_backup(manager, room_id, runtime)
+        except (RoomError, OSError):
+            raise HTTPException(409, "Room backup failed; check room state and Docker health") from None
+
+    @app.get("/api/rooms/{room_id}/backups/{name}/preview",
+             dependencies=[Depends(authorize)])
+    def preview_full_room_backup(room_id: str, name: str):
+        from .room_archive import preview_room_backup
+        try:
+            return preview_room_backup(manager, room_id, name)
+        except RoomError:
+            raise HTTPException(409, "Backup is missing, damaged, or not this room's archive") from None
+
+    @app.get("/api/rooms/{room_id}/backups/{name}/download",
+             dependencies=[Depends(authorize)])
+    def download_full_room_backup(room_id: str, name: str):
+        from .room_archive import backup_file
+        try:
+            path = backup_file(manager, room_id, name)
+        except RoomError:
+            raise HTTPException(404, "Room backup not found") from None
+        return FileResponse(path, media_type="application/gzip",
+                            filename="serein-" + manager.get(room_id)["room_slug"] + "-" + name,
+                            headers={"Cache-Control": "no-store"})
 
     @app.get("/api/rooms/{room_id}/mcp-tools",
              dependencies=[Depends(authorize)])
