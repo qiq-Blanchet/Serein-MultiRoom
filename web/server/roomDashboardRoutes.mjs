@@ -59,13 +59,15 @@ export async function dashboardRoomEndpoint(req, res, {
 }) {
   const action = /^\/__serein\/rooms\/([a-f0-9]{32})\/(start|stop)$/.exec(path);
   const mcpTools = /^\/__serein\/rooms\/([a-f0-9]{32})\/mcp-tools$/.exec(path);
-  const backups = /^\/__serein\/rooms\/([a-f0-9]{32})\/backups(?:\/(\d{8}T\d{6}Z-[a-f0-9]{12}\.tar\.gz)\/(preview|download))?$/.exec(path);
+  const backups = /^\/__serein\/rooms\/([a-f0-9]{32})\/backups(?:\/(\d{8}T\d{6}Z-[a-f0-9]{12}\.tar\.gz)\/(preview|download|restore-plan|restore))?$/.exec(path);
   if (!action && !mcpTools && !backups && !['/__serein/rooms', '/__serein/rooms/select', '/__serein/rooms/reset', '/__serein/rooms/current'].includes(path)) return false;
   const origin = publicOrigin || new URL('http://' + req.headers.host);
   if (!sameOrigin(req, origin)) { send(res, 403, {detail:'Same-origin request required'}); return true; }
   if ((action || path === '/__serein/rooms/select' || path === '/__serein/rooms/reset') && req.method !== 'POST'
       || mcpTools && !['GET','POST'].includes(req.method)
-      || backups && !(backups[2] ? req.method === 'GET' : ['GET','POST'].includes(req.method))
+      || backups && !(backups[2] ?
+           req.method === (backups[3] === 'restore' ? 'POST' : 'GET') :
+           ['GET','POST'].includes(req.method))
       || path === '/__serein/rooms/current' && req.method !== 'GET'
       || path === '/__serein/rooms' && !['GET','POST'].includes(req.method)) {
     send(res, 405, {detail:'Method not allowed'});return true;
@@ -110,13 +112,22 @@ export async function dashboardRoomEndpoint(req, res, {
       send(res,409,{detail:'房间已经切换，请刷新页面后再备份。'});return true;
     }
     let payload;
-    if (!backups[2] && req.method === 'POST') {
+    if (req.method === 'POST') {
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
         send(res,415,{detail:'JSON required'});return true;
       }
       try { payload = await readBody(req); }
       catch { send(res,400,{detail:'Invalid room backup request'});return true; }
-      if (Object.keys(payload).length) {
+      const isRestore = backups[3] === 'restore';
+      if (isRestore) {
+        const slug=payload.confirm_room_id, hash=payload.expected_sha256;
+        if (typeof slug !== 'string' || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(slug)
+            || slug.length < 3 || slug.length > 48
+            || typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash)
+            || Object.keys(payload).some(key=>!['confirm_room_id','expected_sha256'].includes(key))) {
+          send(res,400,{detail:'Restore requires exact room ID and archive checksum'});return true;
+        }
+      } else if (Object.keys(payload).length) {
         send(res,400,{detail:'Unexpected room backup options'});return true;
       }
     }
