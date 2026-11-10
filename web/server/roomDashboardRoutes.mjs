@@ -127,6 +127,9 @@ export async function dashboardRoomEndpoint(req, res, {
             || Object.keys(payload).some(key=>!['confirm_room_id','expected_sha256'].includes(key))) {
           send(res,400,{detail:'Restore requires exact room ID and archive checksum'});return true;
         }
+        if (slug !== selected.room_slug) {
+          send(res,409,{detail:'Restore room ID does not match current AI'});return true;
+        }
       } else if (Object.keys(payload).length) {
         send(res,400,{detail:'Unexpected room backup options'});return true;
       }
