@@ -59,7 +59,7 @@ export function LegacyMigration(){
   },[archiveRoomId]);
   async function createArchive(){
     if(!archiveRoomId||archiveBusy)return;
-    if(!window.confirm('为当前 AI 房间创建完整备份？会短暂停止并重新启动这一间房，其他 AI 不受影响。备份包含私人记忆和密钥，请私密保存。'))return;
+    if(!window.confirm('为当前 AI 房间创建完整备份？会短暂停止并重新启动这一间房，其他 AI 不受影响。备份不包含 Gateway Key，但数据库可能包含模型服务商凭据，请私密保存。'))return;
     setArchiveBusy(true);setArchiveError('正在为当前房间创建一致性备份……');
     try{
       const created=await archiveRequest('',{method:'POST',body:'{}'});
@@ -205,8 +205,8 @@ export function LegacyMigration(){
     <div className="settings-actions"><button type="button" disabled={backupBusy} onClick={downloadBackup}>{backupBusy?'正在下载…':'下载当前房间导出文件'}</button></div>
     <p role="status">{backupMessage}</p>
     {archiveRoomId&&<details className="settings-menu">
-      <summary><strong>当前房间完整归档</strong> <small>配置、数据库、附件、索引和本房密钥</small></summary>
-      <p className="import-help">仅备份 {roomLabel||'当前 AI'}。创建时会暂时停止并重新启动本房间；其他房间正常工作。归档包含 Gateway Key、内部密钥和模型提供商凭据，请务必私密保存。</p>
+      <summary><strong>当前房间完整归档</strong> <small>配置、数据库、附件、索引（不打包连接密钥）</small></summary>
+      <p className="import-help">仅备份 {roomLabel||'当前 AI'}。创建时会暂时停止并重新启动本房间；其他房间正常工作。归档不包含 Gateway Key 和内部连接令牌，恢复到新 VPS 时可使用新生成的 Key；数据库仍可能包含模型提供商凭据，请私密保存。</p>
       <div className="settings-actions">
         <button type="button" disabled={archiveBusy} onClick={createArchive}>
           {archiveBusy?'正在处理当前房间……':'创建当前房间完整备份'}
@@ -224,6 +224,8 @@ export function LegacyMigration(){
       {archivePreview&&<p className="import-help">
         已校验：{archivePreview.room_slug} · {archivePreview.files} 个文件 ·
         {(archivePreview.total_uncompressed_bytes/1048576).toFixed(1)} MiB（解压后）。
+        {archivePreview.same_installation===false?'这是同房间 ID 的其他安装来源备份，可预览，不要求原 Gateway Key。':''}
+        {archivePreview.includes_secrets?'注意：这是旧格式归档，仍含旧 Gateway Key，请勿公开分享。':''}
         此阶段只提供安全预览，不直接覆盖恢复数据库。
       </p>}
       <p role="status">{archiveError}</p>
