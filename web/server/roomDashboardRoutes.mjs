@@ -60,10 +60,10 @@ export async function dashboardRoomEndpoint(req, res, {
   const action = /^\/__serein\/rooms\/([a-f0-9]{32})\/(start|stop)$/.exec(path);
   const mcpTools = /^\/__serein\/rooms\/([a-f0-9]{32})\/mcp-tools$/.exec(path);
   const backups = /^\/__serein\/rooms\/([a-f0-9]{32})\/backups(?:\/(\d{8}T\d{6}Z-[a-f0-9]{12}\.tar\.gz)\/(preview|download))?$/.exec(path);
-  if (!action && !mcpTools && !backups && !['/__serein/rooms', '/__serein/rooms/select', '/__serein/rooms/current'].includes(path)) return false;
+  if (!action && !mcpTools && !backups && !['/__serein/rooms', '/__serein/rooms/select', '/__serein/rooms/reset', '/__serein/rooms/current'].includes(path)) return false;
   const origin = publicOrigin || new URL('http://' + req.headers.host);
   if (!sameOrigin(req, origin)) { send(res, 403, {detail:'Same-origin request required'}); return true; }
-  if ((action || path === '/__serein/rooms/select') && req.method !== 'POST'
+  if ((action || path === '/__serein/rooms/select' || path === '/__serein/rooms/reset') && req.method !== 'POST'
       || mcpTools && !['GET','POST'].includes(req.method)
       || backups && !(backups[2] ? req.method === 'GET' : ['GET','POST'].includes(req.method))
       || path === '/__serein/rooms/current' && req.method !== 'GET'
@@ -72,6 +72,15 @@ export async function dashboardRoomEndpoint(req, res, {
   }
   const ready = readyRooms(routesFile);
   const selected = effectiveRoom(req.headers.cookie, adminKey, ready);
+  if (path === '/__serein/rooms/reset') {
+    // Explicit user action to leave a stopped room. No implicit switch.
+    const secure = origin.protocol === 'https:';
+    send(res, 200, {cleared:true}, {
+      'Set-Cookie':'serein_dashboard_room=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict' +
+        (secure ? '; Secure' : ''),
+    });
+    return true;
+  }
   if (path === '/__serein/rooms/current') {
     send(res, 200, {room_id:selected?.room_id || null,
       room_slug:selected?.room_slug || null, enabled:true}); return true;
