@@ -1,7 +1,12 @@
 import {useEffect,useState} from 'react';
+import { roomTargetHeaders } from '../storage/roomScopedStorage.js';
 
 async function call(path='',body){
-  const response=await fetch('/__serein/migration'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const response=await fetch('/__serein/migration'+path,{
+    method:body===undefined?'GET':'POST',credentials:'same-origin',cache:'no-store',
+    headers:{...roomTargetHeaders(),...(body===undefined?{}:{'Content-Type':'application/json'})},
+    ...(body===undefined?{}:{body:JSON.stringify(body)}),
+  });
   const result=await response.json();
   if(!response.ok)throw new Error(result.detail || '旧库操作未完成');
   return result;
@@ -15,12 +20,25 @@ export function LegacyMigration(){
   const [names,setNames]=useState({user_name:'',ai_name:'',aliases:''}),[confirmed,setConfirmed]=useState(false);
   const [generateCues,setGenerateCues]=useState(true),[cueChoices,setCueChoices]=useState({});
   const [backupBusy,setBackupBusy]=useState(false),[backupMessage,setBackupMessage]=useState('');
+  const [backupKind,setBackupKind]=useState('database');
+  const [roomLabel,setRoomLabel]=useState('');
+  useEffect(()=>{
+    let active=true;
+    fetch('/__serein/rooms/current',{credentials:'same-origin',cache:'no-store'})
+      .then(async response=>response.ok && (response.headers.get('content-type')||'').includes('application/json')?response.json():null)
+      .then(data=>{if(active&&data?.enabled&&data.room_id)setRoomLabel(data.room_slug||data.room_id);})
+      .catch(()=>{});
+    return()=>{active=false;};
+  },[]);
   async function downloadBackup(){
     if(backupBusy)return;
-    setBackupBusy(true);setBackupMessage('正在准备并接收数据库备份，请保持页面打开…');
+    setBackupBusy(true);setBackupMessage('正在准备当前房间的导出文件，请保持页面打开…');
     try{
-      // Fetch inside the signed-in page: mobile download managers may lose Basic auth.
-      const response=await fetch('/__serein/export/backup',{credentials:'same-origin',cache:'no-store'});
+      // Fetch inside the authenticated page: mobile downloads may lose Basic auth.
+      const target=backupKind==='database'?'/__serein/export/backup':
+        '/__serein/export/markdown?kind='+encodeURIComponent(backupKind);
+      const response=await fetch(target,{credentials:'same-origin',cache:'no-store',
+        headers:roomTargetHeaders()});
       if(!response.ok){
         const error=await response.json().catch(()=>null);
         throw new Error(response.status===401?'登录已失效，请刷新页面重新登录后下载。':error?.detail||'数据库备份未完成，请稍后重试。');
@@ -28,9 +46,13 @@ export function LegacyMigration(){
       const blob=await response.blob();
       if(!blob.size)throw new Error('收到的备份为空，请重试。');
       const url=URL.createObjectURL(blob),link=document.createElement('a');
-      link.href=url;link.download='serein-backup.db';document.body.appendChild(link);
+      const suggested=response.headers.get('Content-Disposition')||'';
+      const match=/filename="([a-zA-Z0-9_-]+\.(?:db|zip))"/.exec(suggested);
+      const filename=match?.[1]||(
+        backupKind==='database'?'serein-backup.db':`serein-${backupKind}.zip`);
+      link.href=url;link.download=filename;document.body.appendChild(link);
       link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60_000);
-      setBackupMessage('备份已接收，已请求浏览器保存 serein-backup.db。');
+      setBackupMessage('已接收当前房间的 '+filename+'，请妥善保存。');
     }catch(error){setBackupMessage(error instanceof TypeError?'备份连接中断，请保持网络稳定后重试。':error.message||'备份下载未完成，请重试。');}
     finally{setBackupBusy(false);}
   }
@@ -97,7 +119,18 @@ export function LegacyMigration(){
       {item.summary.history?<><p>历史数据：梦境 {item.summary.history.dreams || 0} · 窗影 {item.summary.history.shadows || 0} · 正式日记 {item.summary.history.diaries || 0} · 暗房 {item.summary.history.darkroom || 0} · 日记评论 {item.summary.history.comments || 0} · 修订 {item.summary.history.revisions || 0}</p>{item.summary.history.warnings?.map((warning,index)=><p key={index}>{warning}</p>)}</>:<p>这是旧版本预览，请重新预览同一备份以检查梦境、日记和暗房。</p>}
       {item.summary.memory_comments?<p>记忆注脚／旧年轮：{item.summary.memory_comments.comments} 条 · 涉及 {item.summary.memory_comments.memories} 条旧记忆</p>:<p>请重新预览同一备份，以检查记忆注脚／旧年轮。</p>}
       {item.summary.originals?<><p>旧聊天原文：{item.summary.originals.messages} 条{item.summary.originals.path?` · ${item.summary.originals.path}`:''}</p>{item.summary.originals.warnings?.map((warning,index)=><p key={index}>{warning}</p>)}</>:<p>请重新预览同一备份，以检查旧原文库和日期。</p>}
-      {item.source_path&&<p className="import-help">只读来源：<code>{item.source_path}</code> · <a className="settings-link" href={'/__serein/migration/'+item.id+'/export'} download>导出旧库 ZIP</a></p>}
+      {item.source_path&&<p className="import-help">只读来源：<code>{item.source_path}</code> · <button type="button" className="settings-link" disabled={busy} onClick={async()=>{
+        try {
+          const response=await fetch('/__serein/migration/'+item.id+'/export',{
+            credentials:'same-origin',cache:'no-store',headers:roomTargetHeaders()});
+          if(!response.ok)throw Error('旧库导出失败；如已切换房间请刷新页面。');
+          const blob=await response.blob();
+          const url=URL.createObjectURL(blob),link=document.createElement('a');
+          link.href=url;link.download='ombre-legacy-source.zip';
+          document.body.appendChild(link);link.click();link.remove();
+          setTimeout(()=>URL.revokeObjectURL(url),60_000);
+        }catch(error){setMessage(error.message);}
+      }}>导出旧库 ZIP</button></p>}
       <p>{item.summary.edge_sources?.map(source=>`${source.path}：${source.count} 条`).join('；') || item.summary.edge_warning || '没有找到旧关系边文件，请核对备份是否带有旧服务实际使用的 state 目录。缺少旧边不影响单独导入正文。'}</p>
       {item.options&&<p>续跑沿用：{item.options.user_name} / {item.options.ai_name}{item.options.aliases.length?' · '+item.options.aliases.join('、'):''}</p>}
       {item.options&&<label className="settings-toggle"><span><strong>本批迁移：打标时生成 cues</strong><small>暂停或失败后可修改，仅影响尚未成功打标的条目；保留已保存的 cues，不重跑成功条目。</small></span><input type="checkbox" role="switch" checked={cueChoices[item.id]??item.options.generate_cues??true} disabled={busy||active||task.status==='completed'} onChange={event=>setCueChoices({...cueChoices,[item.id]:event.target.checked})}/></label>}
@@ -107,7 +140,19 @@ export function LegacyMigration(){
       {!active&&task.status!=='completed'&&<p className="import-help">{item.errors.length?'请先修正上面的扫描错误并重新预览。':!item.options&&(!names.user_name.trim()||!names.ai_name.trim())?'请先填写上方旧记忆里的用户名字和 AI 名字。':!confirmed?'请先打开上方“确认转换规则与模型费用”开关。':'可以开始；旧边为 0 不会禁用此按钮。'}</p>}
     </section>;})}
     <p role="status">{message}</p>
-    <div className="settings-actions"><button type="button" disabled={backupBusy} onClick={downloadBackup}>{backupBusy?'正在下载备份…':'下载当前数据库备份'}</button></div>
+    <div className="settings-field">
+      <strong>当前房间备份{roomLabel?' · '+roomLabel:''}</strong>
+      <p className="import-help">导入只会写入当前选中的 AI 房间；如果你在其他标签页切换房间，旧页面的导入或下载会被拒绝，请刷新后重试。</p>
+      <label className="settings-field"><span>导出范围</span>
+        <select disabled={backupBusy} value={backupKind} onChange={event=>setBackupKind(event.target.value)}>
+          <option value="database">完整记忆数据库（SQLite，含梦境／心绪／备忘／日记等）</option>
+          <option value="all">Scene + Event 可读 Markdown ZIP</option>
+          <option value="scene">仅 Scene 可读 Markdown ZIP</option>
+          <option value="event">仅 Event 可读 Markdown ZIP</option>
+        </select>
+      </label>
+    </div>
+    <div className="settings-actions"><button type="button" disabled={backupBusy} onClick={downloadBackup}>{backupBusy?'正在下载…':'下载当前房间导出文件'}</button></div>
     <p role="status">{backupMessage}</p>
     <p>旧库 ZIP 包含所选路径中的全部文件，可能含配置和密钥；数据库备份也包含记忆与模型密钥，请妥善保存。图片、向量索引和安装账号文件需随安装目录另行备份；数据库备份不是一键恢复整站的安装包。</p>
   </section>;
