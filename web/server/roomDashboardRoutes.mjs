@@ -96,7 +96,8 @@ export async function dashboardRoomEndpoint(req, res, {
     // room, AND to the room identity obtained when the browser tab opened.
     // This header is only a stale-tab guard; it cannot select a room.
     if (!selected || backups[1] !== selected.room_id ||
-        req.headers['x-serein-target-room'] !== selected.room_id) {
+        (backups[3] !== 'download' &&
+          req.headers['x-serein-target-room'] !== selected.room_id)) {
       send(res,409,{detail:'房间已经切换，请刷新页面后再备份。'});return true;
     }
     let payload;
@@ -124,7 +125,7 @@ export async function dashboardRoomEndpoint(req, res, {
             ? 'application/gzip':'application/json',
           ...(payload ? {'Content-Type':'application/json'} : {})},
         body:payload ? JSON.stringify(payload) : undefined,
-        signal:AbortSignal.timeout(backups[2] ? 1200000 : 1200000),
+        signal:AbortSignal.timeout(1200000),
       });
       if (!reply.ok || reply.status >= 300) {
         send(res,reply.status >= 400 && reply.status < 500 ? reply.status : 502,
