@@ -90,6 +90,8 @@ def test_full_room_backup_includes_only_one_rooms_config_data_and_keys(tmp_path)
         assert manifest["room_id"] == first
         assert manifest["room_slug"] == "xiaogi-main"
         assert manifest["includes_secrets"]
+        assert isinstance(manifest["sqlite_user_version"], int)
+        assert len(manifest["sqlite_schema_sha256"]) == 64
         assert "SECRET_SCENE_A" not in json.dumps(manifest)
         local = tmp_path/"inspect.db"
         local.write_bytes(data)
@@ -100,6 +102,7 @@ def test_full_room_backup_includes_only_one_rooms_config_data_and_keys(tmp_path)
             ).fetchone()[0]
     preview = preview_room_backup(manager, first, created["name"])
     assert preview["verified"] is True
+    assert preview["sqlite_schema_sha256"] == manifest["sqlite_schema_sha256"]
     assert preview["restore_available"] is False
     assert preview["files"] > 3
     assert "gateway_key" not in preview
