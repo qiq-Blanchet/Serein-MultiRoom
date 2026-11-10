@@ -22,14 +22,62 @@ export function LegacyMigration(){
   const [backupBusy,setBackupBusy]=useState(false),[backupMessage,setBackupMessage]=useState('');
   const [backupKind,setBackupKind]=useState('database');
   const [roomLabel,setRoomLabel]=useState('');
+  const [archiveRoomId,setArchiveRoomId]=useState('');
+  const [archiveItems,setArchiveItems]=useState([]);
+  const [archiveBusy,setArchiveBusy]=useState(false);
+  const [archiveError,setArchiveError]=useState('');
+  const [archivePreview,setArchivePreview]=useState(null);
   useEffect(()=>{
     let active=true;
     fetch('/__serein/rooms/current',{credentials:'same-origin',cache:'no-store'})
       .then(async response=>response.ok && (response.headers.get('content-type')||'').includes('application/json')?response.json():null)
-      .then(data=>{if(active&&data?.enabled&&data.room_id)setRoomLabel(data.room_slug||data.room_id);})
+      .then(data=>{if(active&&data?.enabled&&data.room_id){
+        setRoomLabel(data.room_slug||data.room_id);setArchiveRoomId(data.room_id);
+      }})
       .catch(()=>{});
     return()=>{active=false;};
   },[]);
+  const archivePath=archiveRoomId?'/__serein/rooms/'+archiveRoomId+'/backups':'';
+  async function archiveRequest(suffix='',options={}){
+    const response=await fetch(archivePath+suffix,{
+      credentials:'same-origin',cache:'no-store',
+      headers:{...roomTargetHeaders(),...(options.method==='POST'?{'Content-Type':'application/json'}:{})},
+      ...options,
+    });
+    const json=await response.json().catch(()=>({}));
+    if(!response.ok)throw Error(json.detail||'当前房间归档暂时不可用');
+    return json;
+  }
+  async function refreshArchives(){
+    if(!archiveRoomId)return;
+    const data=await archiveRequest();
+    setArchiveItems(data.items||[]);
+  }
+  useEffect(()=>{
+    if(!archiveRoomId)return;
+    refreshArchives().catch(error=>setArchiveError(error.message));
+  },[archiveRoomId]);
+  async function createArchive(){
+    if(!archiveRoomId||archiveBusy)return;
+    if(!window.confirm('为当前 AI 房间创建完整备份？会短暂停止并重新启动这一间房，其他 AI 不受影响。备份包含私人记忆和密钥，请私密保存。'))return;
+    setArchiveBusy(true);setArchiveError('正在为当前房间创建一致性备份……');
+    try{
+      const created=await archiveRequest('',{method:'POST',body:'{}'});
+      await refreshArchives();
+      setArchivePreview(null);
+      setArchiveError(created.restarted?'已备份并重新启动当前房间。':'当前房间完整备份已创建。');
+    }catch(error){setArchiveError(error.message);}
+    finally{setArchiveBusy(false);}
+  }
+  async function previewArchive(name){
+    setArchiveBusy(true);setArchiveError('正在校验备份文件清单……');
+    try{
+      const result=await archiveRequest('/'+name+'/preview');
+      setArchivePreview(result);
+      setArchiveError(result.verified?'清单和 SHA-256 校验通过。':'备份校验未通过。');
+    }catch(error){setArchivePreview(null);setArchiveError(error.message);}
+    finally{setArchiveBusy(false);}
+  }
   async function downloadBackup(){
     if(backupBusy)return;
     setBackupBusy(true);setBackupMessage('正在准备当前房间的导出文件，请保持页面打开…');
@@ -156,6 +204,30 @@ export function LegacyMigration(){
     </div>
     <div className="settings-actions"><button type="button" disabled={backupBusy} onClick={downloadBackup}>{backupBusy?'正在下载…':'下载当前房间导出文件'}</button></div>
     <p role="status">{backupMessage}</p>
+    {archiveRoomId&&<details className="settings-menu">
+      <summary><strong>当前房间完整归档</strong> <small>配置、数据库、附件、索引和本房密钥</small></summary>
+      <p className="import-help">仅备份 {roomLabel||'当前 AI'}。创建时会暂时停止并重新启动本房间；其他房间正常工作。归档包含 Gateway Key、内部密钥和模型提供商凭据，请务必私密保存。</p>
+      <div className="settings-actions">
+        <button type="button" disabled={archiveBusy} onClick={createArchive}>
+          {archiveBusy?'正在处理当前房间……':'创建当前房间完整备份'}
+        </button>
+        <button type="button" disabled={archiveBusy} onClick={()=>refreshArchives().catch(e=>setArchiveError(e.message))}>刷新备份清单</button>
+      </div>
+      {archiveItems.map(item=><div key={item.name} className="settings-actions">
+        <code>{item.name}</code>
+        <small>{(item.bytes/1048576).toFixed(1)} MiB</small>
+        <button type="button" disabled={archiveBusy} onClick={()=>previewArchive(item.name)}>校验／预览</button>
+        <a className="settings-link" href={archivePath+'/'+item.name+'/download'}
+          download={'serein-'+roomLabel+'-'+item.name}>下载</a>
+      </div>)}
+      {!archiveItems.length&&<p className="import-help">这间房暂时还没有完整归档。</p>}
+      {archivePreview&&<p className="import-help">
+        已校验：{archivePreview.room_slug} · {archivePreview.files} 个文件 ·
+        {(archivePreview.total_uncompressed_bytes/1048576).toFixed(1)} MiB（解压后）。
+        此阶段只提供安全预览，不直接覆盖恢复数据库。
+      </p>}
+      <p role="status">{archiveError}</p>
+    </details>}
     <p>旧库 ZIP 包含所选路径中的全部文件，可能含配置和密钥；数据库备份也包含记忆与模型密钥，请妥善保存。图片、向量索引和安装账号文件需随安装目录另行备份；数据库备份不是一键恢复整站的安装包。</p>
   </section>;
 }
