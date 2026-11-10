@@ -331,3 +331,57 @@ test('browser-streamed full archive is named for the signed current room', async
     assert.equal(selectedFetchCount,1);
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+test('room restore through Dashboard requires correct signed selected room and confirmation', async()=>{
+  const root=mkdtempSync(join(tmpdir(),'dashboard-restore-'));
+  const path=join(root,'routes.json');
+  manifest(path,[A,B]);
+  const name='20261110T140000Z-aabbccddeeff.tar.gz';
+  const sha='1'.repeat(64);
+  const sent=[];
+  const handler=async (url,options)=>{
+    sent.push({url:String(url),method:options.method,body:options.body,
+               auth:options.headers.Authorization});
+    return new Response(JSON.stringify(options.method==='GET'?
+      {name,room_id:A,room_slug:'xiaogi-main',archive_sha256:sha,
+       schema_compatible:true,restore_available:true}:
+      {restored:true,room_id:A,gateway_key_unchanged:true,
+       rollback_backup:'20261110T140001Z-bbcccdddeeee.tar.gz'}),{status:200});
+  };
+  const opts=options(path,handler);
+  const prefix='/__serein/rooms/'+A+'/backups/'+name;
+  const validHeaders={cookie:roomCookie(KEY,A),'x-serein-target-room':A};
+  try{
+    let res=capture();
+    await dashboardRoomEndpoint(req('GET',undefined,validHeaders),res,{
+      ...opts,path:prefix+'/restore-plan'});
+    assert.equal(res.statusCode,200);
+    assert.equal(JSON.parse(res.body).restore_available,true);
+    res=capture();
+    await dashboardRoomEndpoint(req('POST',{
+      confirm_room_id:'xiaogi-main',expected_sha256:sha,
+    },validHeaders),res,{...opts,path:prefix+'/restore'});
+    assert.equal(res.statusCode,200);
+    assert.equal(JSON.parse(res.body).gateway_key_unchanged,true);
+    assert.deepEqual(JSON.parse(sent[1].body),{
+      confirm_room_id:'xiaogi-main',expected_sha256:sha,
+    });
+    assert.ok(sent.every(row=>row.auth==='Bearer '+KEY));
+
+    for(const [headers,payload,status] of [
+      [{cookie:roomCookie(KEY,B),'x-serein-target-room':A},
+       {confirm_room_id:'xiaogi-main',expected_sha256:sha},409],
+      [validHeaders,{confirm_room_id:'other-main',expected_sha256:sha},200],
+      [validHeaders,{confirm_room_id:'xiaogi-main',expected_sha256:'bad'},400],
+      [validHeaders,{confirm_room_id:'xiaogi-main'},400],
+    ]){
+      res=capture();
+      await dashboardRoomEndpoint(req('POST',payload,headers),res,{
+        ...opts,path:prefix+'/restore'});
+      assert.equal(res.statusCode,status);
+    }
+    // The service validates the exact slug: the client proxy never uses
+    // a room ID or Gateway Key provided by the browser to choose a backend.
+    assert.ok(sent.every(row=>row.url.includes('/api/rooms/'+A+'/backups/')));
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
