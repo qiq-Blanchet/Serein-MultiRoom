@@ -2,6 +2,7 @@
 // The browser authenticates only once with the administrator's HTTP Basic key.
 // The administrator token is NEVER returned in a room listing or embedded JS.
 import { readyRooms, effectiveRoom, roomCookie } from './roomSession.mjs';
+import { Readable } from 'node:stream';
 
 function send(res, code, data, extra = {}) {
   const payload = JSON.stringify(data);
@@ -58,11 +59,13 @@ export async function dashboardRoomEndpoint(req, res, {
 }) {
   const action = /^\/__serein\/rooms\/([a-f0-9]{32})\/(start|stop)$/.exec(path);
   const mcpTools = /^\/__serein\/rooms\/([a-f0-9]{32})\/mcp-tools$/.exec(path);
-  if (!action && !mcpTools && !['/__serein/rooms', '/__serein/rooms/select', '/__serein/rooms/current'].includes(path)) return false;
+  const backups = /^\/__serein\/rooms\/([a-f0-9]{32})\/backups(?:\/(\d{8}T\d{6}Z-[a-f0-9]{12}\.tar\.gz)\/(preview|download))?$/.exec(path);
+  if (!action && !mcpTools && !backups && !['/__serein/rooms', '/__serein/rooms/select', '/__serein/rooms/current'].includes(path)) return false;
   const origin = publicOrigin || new URL('http://' + req.headers.host);
   if (!sameOrigin(req, origin)) { send(res, 403, {detail:'Same-origin request required'}); return true; }
   if ((action || path === '/__serein/rooms/select') && req.method !== 'POST'
       || mcpTools && !['GET','POST'].includes(req.method)
+      || backups && !(backups[2] ? req.method === 'GET' : ['GET','POST'].includes(req.method))
       || path === '/__serein/rooms/current' && req.method !== 'GET'
       || path === '/__serein/rooms' && !['GET','POST'].includes(req.method)) {
     send(res, 405, {detail:'Method not allowed'});return true;
@@ -86,6 +89,68 @@ export async function dashboardRoomEndpoint(req, res, {
       const room = await response.json();
       send(res,200,{room:fields(room)});
     } catch {send(res,502,{detail:'Room lifecycle administrator unavailable'});}
+    return true;
+  }
+  if (backups) {
+    // Downloads and snapshots are explicitly scoped to the signed current
+    // room, AND to the room identity obtained when the browser tab opened.
+    // This header is only a stale-tab guard; it cannot select a room.
+    if (!selected || backups[1] !== selected.room_id ||
+        req.headers['x-serein-target-room'] !== selected.room_id) {
+      send(res,409,{detail:'房间已经切换，请刷新页面后再备份。'});return true;
+    }
+    let payload;
+    if (!backups[2] && req.method === 'POST') {
+      if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
+        send(res,415,{detail:'JSON required'});return true;
+      }
+      try { payload = await readBody(req); }
+      catch { send(res,400,{detail:'Invalid room backup request'});return true; }
+      if (Object.keys(payload).length) {
+        send(res,400,{detail:'Unexpected room backup options'});return true;
+      }
+    }
+    try {
+      const base = new URL(adminURL);
+      if (base.username || base.password || base.pathname !== '/' || base.search || base.hash
+          || base.protocol !== 'http:' ||
+          (!['localhost','127.0.0.1','[::1]','serein-room-admin'].includes(base.hostname)
+            && !privateDockerAdminHost(base.hostname))) throw Error('Private admin URL required');
+      const endpoint = '/api/rooms/' + selected.room_id + '/backups' +
+        (backups[2] ? '/' + backups[2] + '/' + backups[3] : '');
+      const reply = await fetchImpl(new URL(endpoint,base),{
+        method:req.method,redirect:'manual',
+        headers:{Authorization:'Bearer ' + adminKey,Accept:backups[3]==='download'
+            ? 'application/gzip':'application/json',
+          ...(payload ? {'Content-Type':'application/json'} : {})},
+        body:payload ? JSON.stringify(payload) : undefined,
+        signal:AbortSignal.timeout(backups[2] ? 1200000 : 1200000),
+      });
+      if (!reply.ok || reply.status >= 300) {
+        send(res,reply.status >= 400 && reply.status < 500 ? reply.status : 502,
+             {detail:'房间备份未完成或备份文件不可用'});return true;
+      }
+      if (backups[3] === 'download') {
+        res.writeHead(200, {
+          'Content-Type':'application/gzip',
+          'Cache-Control':'no-store',
+          'X-Content-Type-Options':'nosniff',
+          'Content-Disposition':'attachment; filename="serein-' +
+             (selected.room_slug || selected.room_id) + '-' + backups[2] + '"',
+          ...(reply.headers.get('Content-Length') ?
+             {'Content-Length':reply.headers.get('Content-Length')} : {}),
+        });
+        if (reply.body) await new Promise((resolve,reject) =>
+          Readable.fromWeb(reply.body).on('error',reject).on('end',resolve).pipe(res));
+        else res.end();
+        return true;
+      }
+      const data = await reply.json();
+      send(res,reply.status === 201 ? 201 : 200,data);
+    } catch {
+      if (res.headersSent && typeof res.destroy === 'function') res.destroy();
+      else send(res,502,{detail:'整房备份服务暂不可用，请检查当前房间状态'});
+    }
     return true;
   }
   if (mcpTools) {
