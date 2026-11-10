@@ -517,6 +517,10 @@ class RoomManager:
 
     def start(self, room_id: str, runtime: "DockerRuntime", *, wait_seconds: int = 45) -> dict:
         room = self.get(room_id)
+        # A VPS crash in the middle of a two-directory restore must never
+        # boot half-restored memory. Require local restore-recover first.
+        if (self.room_dir(room_id) / "backups" / ".restore-journal.json").exists():
+            raise RoomError("Interrupted restore must be recovered before room start")
         if room["state"] not in ("stopped", "ready"):
             raise RoomError("Only stopped or ready rooms may start")
         try:
