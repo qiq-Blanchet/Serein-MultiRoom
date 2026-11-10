@@ -47,7 +47,7 @@ def markdown_archive(database, kind: Literal['all', 'scene', 'event'] = 'all'):
                 # Original body stays intact below the portable metadata.
                 metadata={key:doc.get(key) for key in ('id','kind','title','revision','lifecycle','created_at','updated_at')}
                 front='\n'.join(key+': '+json.dumps(value,ensure_ascii=False) for key,value in metadata.items())
-                archive.writestr(f'{kind}/{slug}--{safe_id}.md','---\n'+front+'\n---\n\n'+doc['body_md'])
+                archive.writestr(f'{selected_kind}/{slug}--{safe_id}.md','---\n'+front+'\n---\n\n'+doc['body_md'])
     return output.getvalue()
 
 
