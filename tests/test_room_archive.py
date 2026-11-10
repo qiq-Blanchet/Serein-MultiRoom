@@ -53,7 +53,7 @@ def _seed(manager, room_id, tag):
     return home
 
 
-def test_full_room_backup_includes_only_one_rooms_config_data_and_keys(tmp_path):
+def test_full_room_backup_includes_one_rooms_config_and_data_without_connection_keys(tmp_path):
     manager = RoomManager(tmp_path / "isolated")
     first = manager.create("A", source="blank", room_slug="xiaogi-main")["room"]["room_id"]
     second = manager.create("B", source="blank", room_slug="other-main")["room"]["room_id"]
@@ -78,8 +78,9 @@ def test_full_room_backup_includes_only_one_rooms_config_data_and_keys(tmp_path)
         assert names[0] == "manifest.json"
         assert all(n == "manifest.json" or n.startswith("payload/") for n in names)
         assert "payload/config/config.toml" in names
-        assert "payload/secrets/gateway-key" in names
-        assert "payload/secrets/api-token" in names
+        assert "payload/secrets/gateway-key" not in names
+        assert "payload/secrets/api-token" not in names
+        assert not any(name.startswith("payload/secrets/") for name in names)
         assert "payload/data/serein.db" in names
         assert "payload/data/uploads/image.png" in names
         assert all(not n.startswith("payload/backups/") for n in names)
@@ -89,7 +90,9 @@ def test_full_room_backup_includes_only_one_rooms_config_data_and_keys(tmp_path)
         manifest = json.load(packed.extractfile("manifest.json"))
         assert manifest["room_id"] == first
         assert manifest["room_slug"] == "xiaogi-main"
-        assert manifest["includes_secrets"]
+        assert manifest["includes_secrets"] is False
+        assert "gateway_key_sha256" not in manifest
+        assert manifest["format"] == "serein-room-backup-v2"
         assert isinstance(manifest["sqlite_user_version"], int)
         assert len(manifest["sqlite_schema_sha256"]) == 64
         assert "SECRET_SCENE_A" not in json.dumps(manifest)
@@ -102,6 +105,8 @@ def test_full_room_backup_includes_only_one_rooms_config_data_and_keys(tmp_path)
             ).fetchone()[0]
     preview = preview_room_backup(manager, first, created["name"])
     assert preview["verified"] is True
+    assert preview["includes_secrets"] is False
+    assert preview["same_installation"] is True
     assert preview["sqlite_schema_sha256"] == manifest["sqlite_schema_sha256"]
     assert preview["restore_available"] is False
     assert preview["files"] > 3
@@ -190,29 +195,71 @@ def test_concurrent_snapshots_are_rejected_before_room_is_paused(tmp_path):
     assert room_backups(manager, room) == []
 
 
-def test_preview_rejects_rewritten_gateway_key_even_with_valid_file_hashes(tmp_path):
+def test_portable_room_archive_can_be_checked_after_vps_reinstallation(tmp_path):
+    """Different installation UUIDs and new gateway tokens must not block backup."""
+    old = RoomManager(tmp_path / "old-vps")
+    old_id = old.create("Old", source="blank", room_slug="xiaogi-main")["room"]["room_id"]
+    _seed(old, old_id, "OLD_VPS")
+    archived = create_room_backup(old, old_id, Runtime())
+    source = backup_file(old, old_id, archived["name"])
+    new = RoomManager(tmp_path / "replacement-vps")
+    new_created = new.create("New", source="blank", room_slug="xiaogi-main")
+    new_id = new_created["room"]["room_id"]
+    assert new_id != old_id
+    assert new_created["gateway_key"] != (
+        old.room_dir(old_id) / "secrets" / "gateway-key"
+    ).read_text().strip()
+    copy = new.room_dir(new_id) / "backups" / archived["name"]
+    shutil.copyfile(source, copy)
+    result = preview_room_backup(new, new_id, archived["name"])
+    assert result["verified"] is True
+    assert result["room_slug"] == "xiaogi-main"
+    assert result["source_room_id"] == old_id
+    assert result["room_id"] == new_id
+    assert result["same_installation"] is False
+    assert result["includes_secrets"] is False
+    assert result["restore_available"] is False
+    # Preview never writes into the replacement instance's existing data.
+    with Store(new.room_dir(new_id) / "data" / "serein.db") as store:
+        assert not store.conn.execute(
+            "SELECT 1 FROM documents WHERE id=?", ("scene-OLD_VPS",)
+        ).fetchone()
+
+
+def test_legacy_archives_remain_previewable_without_matching_gateway_keys(tmp_path):
+    """Old key-bearing v1 archives remain readable, but don't grant access."""
     from hashlib import sha256
-    manager = RoomManager(tmp_path / "rooms")
-    room = manager.create("A", source="blank")["room"]["room_id"]
-    created = create_room_backup(manager, room, Runtime())
-    original = backup_file(manager, room, created["name"])
-    forged = original.with_name("20261110T140000Z-abcdefabcdef.tar.gz")
-    with tarfile.open(original, "r:gz") as source:
-        files = {member.name: source.extractfile(member).read()
-                 for member in source.getmembers()}
-    manifest = json.loads(files["manifest.json"])
-    fake_key = b"ANOTHER_AI_GATEWAY_KEY_NEVER_MATCHES"
-    files["payload/secrets/gateway-key"] = fake_key
-    for entry in manifest["files"]:
-        if entry["path"] == "secrets/gateway-key":
-            entry["size"] = len(fake_key)
-            entry["sha256"] = sha256(fake_key).hexdigest()
-    files["manifest.json"] = json.dumps(manifest).encode()
-    with tarfile.open(forged, "w:gz") as archive:
-        for name, blob in files.items():
+    manager = RoomManager(tmp_path / "old-vps")
+    old_id = manager.create("Old", source="blank", room_slug="xiaogi-main")["room"]["room_id"]
+    result = create_room_backup(manager, old_id, Runtime())
+    source = backup_file(manager, old_id, result["name"])
+    with tarfile.open(source, "r:gz") as packed:
+        contents = {member.name: packed.extractfile(member).read()
+                    for member in packed.getmembers()}
+    manifest = json.loads(contents["manifest.json"])
+    manifest["format"] = "serein-room-backup-v1"
+    manifest["includes_secrets"] = True
+    old_key = (manager.room_dir(old_id) / "secrets" / "gateway-key").read_bytes()
+    contents["payload/secrets/gateway-key"] = old_key
+    manifest["files"].append({
+        "path": "secrets/gateway-key", "size": len(old_key),
+        "sha256": sha256(old_key).hexdigest(),
+    })
+    contents["manifest.json"] = json.dumps(manifest).encode("utf-8")
+    legacy = source.with_name("20261110T140000Z-abcdefabcdef.tar.gz")
+    with tarfile.open(legacy, "w:gz") as packed:
+        for name, blob in contents.items():
             info = tarfile.TarInfo(name)
             info.size = len(blob)
-            archive.addfile(info, io.BytesIO(blob))
-    with pytest.raises(RoomError, match="Gateway Key content"):
-        preview_room_backup(manager, room, forged.name)
-    assert manager.get(room)["state"] == "stopped"
+            packed.addfile(info, io.BytesIO(blob))
+    fresh = RoomManager(tmp_path / "new-vps")
+    new_id = fresh.create("New", source="blank", room_slug="xiaogi-main")["room"]["room_id"]
+    assert new_id != old_id
+    fresh_path = fresh.room_dir(new_id) / "backups" / legacy.name
+    shutil.copyfile(legacy, fresh_path)
+    preview = preview_room_backup(fresh, new_id, legacy.name)
+    assert preview["verified"] is True
+    assert preview["includes_secrets"] is True  # Important legacy warning.
+    assert preview["same_installation"] is False
+    assert preview["restore_available"] is False
+    assert preview["room_slug"] == "xiaogi-main"
