@@ -2,8 +2,9 @@
 
 A full room archive requires its memory service to be stopped for a coherent
 file/SQLite snapshot. The original single-room backup tooling is untouched.
-Archive contains secrets: access is administrator-only, with 0600 files.
-Restore is intentionally preview-only in this phase.
+Portable archives exclude room connection secrets (including Gateway Key).
+Model-provider credentials may still be present inside the private database,
+so archives remain administrator-only and mode 0600. Restore is preview-only.
 """
 from __future__ import annotations
 
@@ -22,9 +23,10 @@ from uuid import uuid4
 from .room_manager import RoomError
 from .file_lock import exclusive_lock
 
-ARCHIVE_FORMAT = "serein-room-backup-v1"
+ARCHIVE_FORMAT = "serein-room-backup-v2"
+LEGACY_ARCHIVE_FORMAT = "serein-room-backup-v1"
 ARCHIVE_NAME = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{12}\.tar\.gz$")
-SCOPES = ("config", "data", "secrets")
+SCOPES = ("config", "data")
 MAX_FILES = 50000
 MAX_BYTES = 16 * 1024 * 1024 * 1024
 
@@ -74,8 +76,8 @@ def _collect(home):
                 raise RoomError("Room backup exceeds safety limits")
     if not (home / "data" / "serein.db").is_file():
         raise RoomError("Room memory database is missing")
-    if not (home / "secrets" / "gateway-key").is_file():
-        raise RoomError("Room Gateway Key is missing")
+    if not (home / "config" / "config.toml").is_file():
+        raise RoomError("Room configuration is missing")
     return files
 
 
@@ -110,7 +112,6 @@ def _write_archive(manager, room_id):
                 record = {"path": relative, "size": source.stat().st_size,
                           "sha256": _hash_file(source)}
                 content.append((record, source))
-            key_digest = sha256((home / "secrets" / "gateway-key").read_bytes().strip()).hexdigest()
             with sqlite3.connect(staged / "data" / "serein.db") as database:
                 db_user_version = database.execute("PRAGMA user_version").fetchone()[0]
                 schema_rows = database.execute(
@@ -122,9 +123,10 @@ def _write_archive(manager, room_id):
             manifest = {
                 "format": ARCHIVE_FORMAT, "room_id": room_id,
                 "room_slug": room["room_slug"], "created_at": datetime.now(timezone.utc).isoformat(),
-                "image": room["image"], "gateway_key_sha256": key_digest,
+                "image": room["image"],
                 "sqlite_user_version": db_user_version, "sqlite_schema_sha256": schema_digest,
-                "includes_secrets": True,
+                "includes_secrets": False,
+                "connection_credentials": "regenerate_or_keep_on_destination",
                 "files": [record for record, _ in content],
             }
             manifest_bytes = json.dumps(manifest, ensure_ascii=False, sort_keys=True,
@@ -147,7 +149,7 @@ def _write_archive(manager, room_id):
         raise
     return {"name": name, "room_id": room_id, "room_slug": room["room_slug"],
             "bytes": final.stat().st_size, "sha256": _hash_file(final),
-            "file_count": len(content), "includes_secrets": True}
+            "file_count": len(content), "includes_secrets": False}
 
 
 def create_room_backup(manager, room_id, runtime, *, pause_running=True):
@@ -227,26 +229,34 @@ def preview_room_backup(manager, room_id, name):
             if stream is None:
                 raise RoomError("Missing room backup manifest")
             manifest = json.loads(stream.read(8 * 1024 * 1024 + 1))
-            if manifest.get("format") != ARCHIVE_FORMAT:
+            version = manifest.get("format")
+            if version not in (ARCHIVE_FORMAT, LEGACY_ARCHIVE_FORMAT):
                 raise RoomError("Unsupported room backup format")
-            if (manifest.get("room_id") != room_id or
-                    manifest.get("room_slug") != room["room_slug"]):
+            # The human-chosen room ID is portable across VPS reinstallation.
+            # Original installation UUID and Gateway Key are NOT restore
+            # requirements. Gateway Key is an authentication credential, not
+            # an archive identity. Actual restore still needs explicit admin
+            # confirmation and a safe rollback (not implemented yet).
+            if manifest.get("room_slug") != room["room_slug"]:
                 raise RoomError("This backup belongs to a different AI room")
-            expected_key = sha256((manager.room_dir(room_id) / "secrets" /
-                                   "gateway-key").read_bytes().strip()).hexdigest()
-            if manifest.get("gateway_key_sha256") != expected_key:
-                raise RoomError("Backup Gateway identity does not match this room")
+            source_id = manifest.get("room_id")
+            if not isinstance(source_id, str) or not re.fullmatch(r"[a-f0-9]{32}", source_id):
+                raise RoomError("Invalid original room UUID in backup manifest")
+            legacy = version == LEGACY_ARCHIVE_FORMAT
+            # Legacy archives can contain the old connection credentials.
+            # Validate their file checksums but never compare the keys to the
+            # newly initialized destination room's credentials.
+            allowed_scopes = SCOPES + (("secrets",) if legacy else ())
             entries = manifest.get("files")
             if not isinstance(entries, list) or len(entries) != len(members) - 1:
                 raise RoomError("Backup file list does not match manifest")
             seen = set()
             total = 0
-            key_bytes = None
             for member, entry in zip(members[1:], entries):
                 relative = entry.get("path")
                 if (not isinstance(relative, str) or relative.startswith("/") or
                         "\\" in relative or any(part in ("", ".", "..") for part in relative.split("/")) or
-                        relative.split("/", 1)[0] not in SCOPES or
+                        relative.split("/", 1)[0] not in allowed_scopes or
                         not member.isfile() or member.name != "payload/" + relative or
                         relative in seen or
                         not isinstance(entry.get("size"), int) or entry["size"] != member.size):
@@ -258,28 +268,26 @@ def preview_room_backup(manager, room_id, name):
                 stream = archive.extractfile(member)
                 if stream is None:
                     raise RoomError("Unreadable backup member")
-                if relative == "secrets/gateway-key":
-                    if member.size > 4096:
-                        raise RoomError("Invalid backup Gateway Key length")
-                    key_bytes = archive.extractfile(member).read()
                 digest = sha256()
                 for block in iter(lambda: stream.read(1024 * 1024), b""):
                     digest.update(block)
                 if digest.hexdigest() != entry.get("sha256"):
                     raise RoomError("Backup checksum mismatch")
-            required = {"data/serein.db", "config/config.toml",
-                        "secrets/api-token", "secrets/gateway-key"}
+            required = {"data/serein.db", "config/config.toml"}
             if not required.issubset(seen):
                 raise RoomError("Backup is missing required room files")
-            if not key_bytes or sha256(key_bytes.strip()).hexdigest() != expected_key:
-                raise RoomError("Backup Gateway Key content does not match room identity")
+            if not legacy and any(path.startswith("secrets/") for path in seen):
+                raise RoomError("Portable room archive cannot include connection keys")
     except (tarfile.TarError, OSError, ValueError, KeyError, TypeError,
             json.JSONDecodeError) as exc:
         raise RoomError("Invalid or damaged room archive") from exc
     return {"name": name, "room_id": room_id, "room_slug": room["room_slug"],
+            "source_room_id": source_id, "same_installation": source_id == room_id,
             "created_at": manifest["created_at"], "image": manifest["image"],
+            "backup_format": version,
             "sqlite_user_version": manifest.get("sqlite_user_version"),
             "sqlite_schema_sha256": manifest.get("sqlite_schema_sha256"),
             "files": len(entries), "total_uncompressed_bytes": total,
-            "archive_sha256": _hash_file(path), "includes_secrets": True,
+            "archive_sha256": _hash_file(path),
+            "includes_secrets": bool(manifest.get("includes_secrets", legacy)),
             "verified": True, "restore_available": False}
