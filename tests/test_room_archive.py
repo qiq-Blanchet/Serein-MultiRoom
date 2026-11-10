@@ -173,3 +173,18 @@ def test_archiver_rejects_symlinks_and_does_not_stop_other_rooms(tmp_path):
     assert room_backups(manager,a)==[]
     assert not any("SYNTHETIC_PRIVATE_B" in p.read_text(errors="ignore")
                    for p in (manager.room_dir(a)/"backups").glob("*.tar.gz"))
+
+
+def test_concurrent_snapshots_are_rejected_before_room_is_paused(tmp_path):
+    from serein.file_lock import exclusive_lock
+    manager = RoomManager(tmp_path / "rooms")
+    room = manager.create("A", source="blank")["room"]["room_id"]
+    runtime = Runtime()
+    manager.start(room, runtime)
+    path = manager.room_dir(room) / "backups" / ".snapshot.lock"
+    with exclusive_lock(path):
+        with pytest.raises(RoomError, match="already running"):
+            create_room_backup(manager, room, runtime)
+    assert manager.get(room)["state"] == "ready"
+    assert runtime.running == {room}
+    assert room_backups(manager, room) == []
