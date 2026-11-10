@@ -188,3 +188,31 @@ def test_concurrent_snapshots_are_rejected_before_room_is_paused(tmp_path):
     assert manager.get(room)["state"] == "ready"
     assert runtime.running == {room}
     assert room_backups(manager, room) == []
+
+
+def test_preview_rejects_rewritten_gateway_key_even_with_valid_file_hashes(tmp_path):
+    from hashlib import sha256
+    manager = RoomManager(tmp_path / "rooms")
+    room = manager.create("A", source="blank")["room"]["room_id"]
+    created = create_room_backup(manager, room, Runtime())
+    original = backup_file(manager, room, created["name"])
+    forged = original.with_name("20261110T140000Z-abcdefabcdef.tar.gz")
+    with tarfile.open(original, "r:gz") as source:
+        files = {member.name: source.extractfile(member).read()
+                 for member in source.getmembers()}
+    manifest = json.loads(files["manifest.json"])
+    fake_key = b"ANOTHER_AI_GATEWAY_KEY_NEVER_MATCHES"
+    files["payload/secrets/gateway-key"] = fake_key
+    for entry in manifest["files"]:
+        if entry["path"] == "secrets/gateway-key":
+            entry["size"] = len(fake_key)
+            entry["sha256"] = sha256(fake_key).hexdigest()
+    files["manifest.json"] = json.dumps(manifest).encode()
+    with tarfile.open(forged, "w:gz") as archive:
+        for name, blob in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(blob)
+            archive.addfile(info, io.BytesIO(blob))
+    with pytest.raises(RoomError, match="Gateway Key content"):
+        preview_room_backup(manager, room, forged.name)
+    assert manager.get(room)["state"] == "stopped"
