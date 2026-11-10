@@ -97,7 +97,7 @@ const server = http.createServer((req, res) => {
   if (multiRoom && path.startsWith('/__serein/rooms')
       && (['/__serein/rooms','/__serein/rooms/select','/__serein/rooms/reset','/__serein/rooms/current'].includes(path)
           || /^\/__serein\/rooms\/[a-f0-9]{32}\/(start|stop|mcp-tools)$/.test(path)
-          || /^\/__serein\/rooms\/[a-f0-9]{32}\/backups(?:\/\d{8}T\d{6}Z-[a-f0-9]{12}\.tar\.gz\/(preview|download))?$/.test(path))) {
+          || /^\/__serein\/rooms\/[a-f0-9]{32}\/backups(?:\/\d{8}T\d{6}Z-[a-f0-9]{12}\.tar\.gz\/(preview|download|restore-plan|restore))?$/.test(path))) {
     void dashboardRoomEndpoint(req, res, {
       path, publicOrigin, adminKey,
       routesFile:process.env.SEREIN_MULTIROOM_ROUTES_FILE,
