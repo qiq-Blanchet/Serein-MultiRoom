@@ -79,6 +79,26 @@ export function LegacyMigration(){
     }catch(error){setArchivePreview(null);setArchiveError(error.message);}
     finally{setArchiveBusy(false);}
   }
+  async function uploadArchive(file){
+    if(!file || archiveBusy || !archiveRoomId)return;
+    if(!/\.(?:tar\.gz|tgz)$/i.test(file.name)){
+      setArchiveError('请选择 Serein 完整房间备份 .tar.gz 文件');return;
+    }
+    if(!window.confirm('只将这份归档上传到【'+roomLabel+'】的私有备份目录并校验，不会自动覆盖记忆。确定继续？'))return;
+    setArchiveBusy(true);setArchiveError('正在上传并验证备份所属房间……');
+    try{
+      const response=await fetch(archivePath+'/upload',{
+        method:'POST',body:file,credentials:'same-origin',cache:'no-store',
+        headers:{...roomTargetHeaders(),'Content-Type':'application/gzip'},
+      });
+      const result=await response.json().catch(()=>({}));
+      if(!response.ok)throw Error(result.detail||'上传失败，房间 ID 可能不一致');
+      await refreshArchives();
+      setArchivePreview(null);
+      setArchiveError('已上传并校验属于【'+result.room_slug+'】。请先点「校验／预览」，再决定是否恢复。');
+    }catch(error){setArchiveError(error.message||'备份上传中断');}
+    finally{setArchiveBusy(false);}
+  }
   async function restoreArchive(){
     const plan=archivePreview;
     if(!plan || !plan.restore_available || restoreBusy || archiveBusy)return;
@@ -238,6 +258,16 @@ export function LegacyMigration(){
     {archiveRoomId&&<details className="settings-menu">
       <summary><strong>当前房间完整归档</strong> <small>配置、数据库、附件、索引（不打包连接密钥）</small></summary>
       <p className="import-help">仅备份 {roomLabel||'当前 AI'}。创建时会暂时停止并重新启动本房间；其他房间正常工作。归档不包含 Gateway Key 和内部连接令牌，恢复到新 VPS 时可使用新生成的 Key；数据库仍可能包含模型提供商凭据，请私密保存。</p>
+      <div className="settings-actions">
+        <label>导入已有的整房备份（只上传并校验，不立即恢复）
+          <input type="file" accept=".tar.gz,.tgz,application/gzip"
+            disabled={archiveBusy} onChange={event=>{
+              const file=event.target.files?.[0];
+              event.target.value='';
+              if(file)uploadArchive(file);
+            }}/>
+        </label>
+      </div>
       <div className="settings-actions">
         <button type="button" disabled={archiveBusy} onClick={createArchive}>
           {archiveBusy?'正在处理当前房间……':'创建当前房间完整备份'}
