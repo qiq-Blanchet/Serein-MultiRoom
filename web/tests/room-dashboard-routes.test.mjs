@@ -224,6 +224,28 @@ test('MCP editing is limited to the currently selected room and one web login', 
   } finally {rmSync(root,{recursive:true,force:true});}
 });
 
+test('paused room selection is explicitly reset and never silently falls into another AI', async()=>{
+  const root=mkdtempSync(join(tmpdir(),'dashboard-reset-')),path=join(root,'routes.json');
+  manifest(path,[A]);
+  try {
+    let res=capture();
+    await dashboardRoomEndpoint(req('GET',undefined,{cookie:roomCookie(KEY,B)}),res,{
+      ...options(path,()=>{throw Error('Reset must stay local');}),
+      path:'/__serein/rooms/current',
+    });
+    assert.equal(res.statusCode,200);
+    assert.equal(JSON.parse(res.body).room_id,null);
+    res=capture();
+    await dashboardRoomEndpoint(req('POST',{}, {cookie:roomCookie(KEY,B)}),res,{
+      ...options(path,()=>{throw Error('Reset must stay local');}),
+      path:'/__serein/rooms/reset',
+    });
+    assert.equal(res.statusCode,200);
+    assert.equal(JSON.parse(res.body).cleared,true);
+    assert.match(res.headers['Set-Cookie'],/Max-Age=0; HttpOnly; SameSite=Strict/);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
 test('full-room archive operations require same selected AI and stale-tab marker', async () => {
   const root=mkdtempSync(join(tmpdir(),'dashboard-archive-')),path=join(root,'routes.json');
   manifest(path,[A,B]);
