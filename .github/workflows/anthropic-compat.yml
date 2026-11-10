@@ -34,6 +34,7 @@ jobs:
           tests/test_dashboard_deployment.py
           tests/test_room_services_isolation.py
           tests/test_room_import_export.py
+          tests/test_room_archive.py
       - name: Verify reviewed release manifest
         run: python scripts/release.py /tmp/serein-multiroom-test.zip
 
