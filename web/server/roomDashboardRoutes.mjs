@@ -70,7 +70,8 @@ export async function dashboardRoomEndpoint(req, res, {
   const ready = readyRooms(routesFile);
   const selected = effectiveRoom(req.headers.cookie, adminKey, ready);
   if (path === '/__serein/rooms/current') {
-    send(res, 200, {room_id:selected?.room_id || null, enabled:true}); return true;
+    send(res, 200, {room_id:selected?.room_id || null,
+      room_slug:selected?.room_slug || null, enabled:true}); return true;
   }
   if (action) {
     const responseUrl = new URL('/api/rooms/' + action[1] + '/' + action[2], adminURL);
