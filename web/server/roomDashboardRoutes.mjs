@@ -60,7 +60,8 @@ export async function dashboardRoomEndpoint(req, res, {
   const action = /^\/__serein\/rooms\/([a-f0-9]{32})\/(start|stop)$/.exec(path);
   const mcpTools = /^\/__serein\/rooms\/([a-f0-9]{32})\/mcp-tools$/.exec(path);
   const backups = /^\/__serein\/rooms\/([a-f0-9]{32})\/backups(?:\/(\d{8}T\d{6}Z-[a-f0-9]{12}\.tar\.gz)\/(preview|download|restore-plan|restore))?$/.exec(path);
-  if (!action && !mcpTools && !backups && !['/__serein/rooms', '/__serein/rooms/select', '/__serein/rooms/reset', '/__serein/rooms/current'].includes(path)) return false;
+  const backupUpload = /^\/__serein\/rooms\/([a-f0-9]{32})\/backups\/upload$/.exec(path);
+  if (!action && !mcpTools && !backups && !backupUpload && !['/__serein/rooms', '/__serein/rooms/select', '/__serein/rooms/reset', '/__serein/rooms/current'].includes(path)) return false;
   const origin = publicOrigin || new URL('http://' + req.headers.host);
   if (!sameOrigin(req, origin)) { send(res, 403, {detail:'Same-origin request required'}); return true; }
   if ((action || path === '/__serein/rooms/select' || path === '/__serein/rooms/reset') && req.method !== 'POST'
@@ -68,6 +69,7 @@ export async function dashboardRoomEndpoint(req, res, {
       || backups && !(backups[2] ?
            req.method === (backups[3] === 'restore' ? 'POST' : 'GET') :
            ['GET','POST'].includes(req.method))
+      || backupUpload && req.method !== 'POST'
       || path === '/__serein/rooms/current' && req.method !== 'GET'
       || path === '/__serein/rooms' && !['GET','POST'].includes(req.method)) {
     send(res, 405, {detail:'Method not allowed'});return true;
@@ -100,6 +102,43 @@ export async function dashboardRoomEndpoint(req, res, {
       const room = await response.json();
       send(res,200,{room:fields(room)});
     } catch {send(res,502,{detail:'Room lifecycle administrator unavailable'});}
+    return true;
+  }
+  if (backupUpload) {
+    if (!selected || backupUpload[1] !== selected.room_id ||
+        req.headers['x-serein-target-room'] !== selected.room_id) {
+      send(res,409,{detail:'房间已经切换，请刷新页面后再上传备份。'});return true;
+    }
+    if (!['application/gzip','application/octet-stream'].includes(
+         String(req.headers['content-type']||'').split(';')[0].trim())) {
+      send(res,415,{detail:'Only gzip room archives are accepted'});return true;
+    }
+    const contentLength=Number(req.headers['content-length']||0);
+    if (!Number.isFinite(contentLength) || contentLength < 0 ||
+        contentLength > 16*1024*1024*1024) {
+      send(res,413,{detail:'Room archive exceeds size limit'});return true;
+    }
+    try {
+      const base=new URL(adminURL);
+      if (base.username || base.password || base.pathname !== '/' || base.search || base.hash
+          || base.protocol !== 'http:' ||
+          (!['localhost','127.0.0.1','[::1]','serein-room-admin'].includes(base.hostname)
+          && !privateDockerAdminHost(base.hostname))) throw Error('Private admin URL required');
+      const reply=await fetchImpl(
+        new URL('/api/rooms/'+selected.room_id+'/backups/upload',base),{
+          method:'POST',redirect:'manual',
+          headers:{Authorization:'Bearer '+adminKey,
+                   'Content-Type':'application/gzip'},
+          body:req,duplex:'half',signal:AbortSignal.timeout(1200000),
+        });
+      if (!reply.ok) {
+        send(res,reply.status >= 400 && reply.status < 500 ? reply.status : 502,
+             {detail:'备份上传未通过当前房间身份或完整性校验'});return true;
+      }
+      send(res,201,await reply.json());
+    } catch {
+      send(res,502,{detail:'备份上传中断，请检查连接和服务器空间'});
+    }
     return true;
   }
   if (backups) {
