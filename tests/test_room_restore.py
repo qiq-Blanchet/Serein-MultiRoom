@@ -1,4 +1,5 @@
 """Offline real SQLite room restore tests; no user data or real Docker touched."""
+import asyncio
 import json
 import os
 import shutil
@@ -13,6 +14,7 @@ from serein.room_archive import backup_file, create_room_backup, room_backups
 from serein.room_manager import RoomError, RoomManager
 from serein.room_restore import (
     plan_room_restore, restore_room_backup, recover_room_restore,
+    upload_room_archive,
 )
 
 
@@ -207,3 +209,48 @@ def test_restore_held_snapshot_lock_does_not_modify_target(tmp_path):
 
 def plan_room_restore_without_lock(dest,target,name):
     return plan_room_restore(dest,target,name)["archive_sha256"]
+
+
+def test_upload_portable_archive_into_same_slug_across_vps(tmp_path):
+    source, source_id, dest, target, other, archive = setup(tmp_path)
+    raw=backup_file(source,source_id,archive["name"]).read_bytes()
+    current_key=(dest.room_dir(target)/"secrets"/"gateway-key").read_bytes()
+    async def chunks():
+        for idx in range(0,len(raw),8192):
+            yield raw[idx:idx+8192]
+    received=asyncio.run(upload_room_archive(dest,target,chunks()))
+    assert received["verified"] is True
+    assert received["room_slug"]=="xiaogi-main"
+    assert received["includes_secrets"] is False
+    assert received["name"] in [item["name"] for item in room_backups(dest,target)]
+    assert plan_room_restore(dest,target,received["name"])["restore_available"] is True
+    assert get_scene(dest,target,"CURRENT")
+    assert not get_scene(dest,target,"OLD")
+    assert get_scene(dest,other,"OTHER")
+    assert (dest.room_dir(target)/"secrets"/"gateway-key").read_bytes()==current_key
+
+    initial=[entry["name"] for entry in room_backups(dest,other)]
+    with pytest.raises(RoomError,match="different AI room"):
+        asyncio.run(upload_room_archive(dest,other,chunks()))
+    assert [entry["name"] for entry in room_backups(dest,other)]==initial
+
+
+def test_restore_same_vps_never_rotates_existing_gateway_key(tmp_path):
+    manager=RoomManager(tmp_path/"one-vps")
+    created=manager.create("A",source="blank",room_slug="xiaogi-main")
+    rid=created["room"]["room_id"]
+    key=created["gateway_key"]
+    seed(manager,rid,"OLD")
+    runtime=Runtime()
+    manager.start(rid,runtime)
+    archive=create_room_backup(manager,rid,runtime)
+    seed(manager,rid,"NEW")
+    plan=plan_room_restore(manager,rid,archive["name"])
+    restored=restore_room_backup(manager,rid,archive["name"],runtime,
+         confirm_slug="xiaogi-main",expected_sha256=plan["archive_sha256"])
+    assert restored["restored"] is True
+    assert created["gateway_key"] == key
+    assert (manager.room_dir(rid)/"secrets"/"gateway-key").read_text().strip()==key
+    assert manager.resolve_gateway_key(key)==rid
+    assert get_scene(manager,rid,"OLD")
+    assert not get_scene(manager,rid,"NEW")
