@@ -20,6 +20,7 @@ import tempfile
 from uuid import uuid4
 
 from .room_manager import RoomError
+from .file_lock import exclusive_lock
 
 ARCHIVE_FORMAT = "serein-room-backup-v1"
 ARCHIVE_NAME = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{12}\.tar\.gz$")
@@ -150,27 +151,38 @@ def _write_archive(manager, room_id):
 
 
 def create_room_backup(manager, room_id, runtime, *, pause_running=True):
-    """Stop only the target room, snapshot it, then restore its prior running state."""
-    room, _, _ = _room_paths(manager, room_id)
-    if room["state"] not in ("stopped", "ready"):
-        raise RoomError("Room must be stopped or ready to create a complete backup")
-    status = runtime.status(manager, room)
-    running = status.get("container") == "running"
-    if room["state"] == "stopped" and running:
-        raise RoomError("Room appears running despite stopped registry state")
-    if room["state"] == "ready" and not pause_running:
-        raise RoomError("Stop the room for a coherent complete backup")
-    paused = room["state"] == "ready"
-    if paused:
-        manager.stop(room_id, runtime)
-    try:
-        result = _write_archive(manager, room_id)
-    finally:
-        if paused:
-            manager.start(room_id, runtime)
-    result["restarted"] = paused
-    return result
+    """Stop only the target room, snapshot it, then resume its prior state.
 
+    A nonblocking, per-room OS lock prevents two browser tabs from racing:
+    one task must never resume a room while another is still copying files.
+    """
+    _, _, backups = _room_paths(manager, room_id)
+    lock = backups / ".snapshot.lock"
+    if lock.is_symlink():
+        raise RoomError("Unsafe room backup lock")
+    try:
+        with exclusive_lock(lock):
+            room = manager.get(room_id)
+            if room["state"] not in ("stopped", "ready"):
+                raise RoomError("Room must be stopped or ready to create a complete backup")
+            status = runtime.status(manager, room)
+            running = status.get("container") == "running"
+            if room["state"] == "stopped" and running:
+                raise RoomError("Room appears running despite stopped registry state")
+            if room["state"] == "ready" and not pause_running:
+                raise RoomError("Stop the room for a coherent complete backup")
+            paused = room["state"] == "ready"
+            if paused:
+                manager.stop(room_id, runtime)
+            try:
+                result = _write_archive(manager, room_id)
+            finally:
+                if paused:
+                    manager.start(room_id, runtime)
+            result["restarted"] = paused
+            return result
+    except RuntimeError as exc:
+        raise RoomError("Room backup is already running") from exc
 
 def room_backups(manager, room_id):
     _, _, directory = _room_paths(manager, room_id)
