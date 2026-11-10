@@ -305,11 +305,12 @@ runtime/
 - [ ] M2 鉴权与路由：Chat/MCP 静态 Bearer 分流、安全代理与隔离测试已实现；仍待 VPS 双房实测、密钥轮换及 OAuth（M5）。
 - [ ] M3 网页管理与配置克隆：首期独立管理员管理台、第二阶段原版 Dashboard 左侧小房间切换按钮和网页创建/启动/切房、第三阶段隔离 Docker 连接与可自定义网页登录账号均已实现离线版本；**MCP 权限编辑现已进入原版「设置 → 功能」折叠页**，详见 M4；仍待真实 VPS 多容器联机及全部原版页面端到端验收。见 [ROOMS_M3_PHASE1.md](ROOMS_M3_PHASE1.md)、[ROOMS_M3_PHASE2.md](ROOMS_M3_PHASE2.md)、[ROOMS_M3_PHASE3.md](ROOMS_M3_PHASE3.md)。
 - [ ] M4 完整功能与任务隔离：已用两套原版 Serein Application 的合成测试检查独立后台生命周期、独立 SQLite 状态、MCP `tools/list` 和 `tools/call` 权限隔离；已修复新房 MCP 默认空工具清单，并提供逐房间 MCP 权限网页设置（仅重启目标房间）；**真实 Docker 双房自动摘要/梦境/心绪/备忘长时间运行与写入、配置更新端到端验收仍未完成**。见 [ROOMS_M4_PHASE1.md](ROOMS_M4_PHASE1.md)。
-- [ ] M5 OAuth、备份、统一升级：**第一阶段**已将原版导入、SQLite 数据库备份与 Scene/Event 分类 ZIP 绑定当前房间；**第二阶段**新增原版 Dashboard 内「当前房间完整归档」，支持单房停止/恢复运行、排除 Gateway Key/内部 API Token 的便携归档、来源房间自定义 ID 及逐文件 SHA-256 清单校验、预览、流式下载，并避免暂停中隐式回退其他房间。**跨房统一打包、正式恢复/回滚、OAuth、加密、统一升级与真实双房联机仍待后续阶段**。见 [ROOMS_M5_BACKUP_IMPORT_PHASE1.md](ROOMS_M5_BACKUP_IMPORT_PHASE1.md)、[ROOMS_M5_FULL_ARCHIVES_PHASE2.md](ROOMS_M5_FULL_ARCHIVES_PHASE2.md)。
+- [ ] M5 OAuth、备份、统一升级：**第一阶段**已将原版导入、SQLite 数据库备份与 Scene/Event 分类 ZIP 绑定当前房间；**第二阶段**新增原版 Dashboard 内「当前房间完整归档」，支持单房停止/恢复运行、排除 Gateway Key/内部 API Token 的便携归档、来源房间自定义 ID 及逐文件 SHA-256 清单校验、预览、流式下载，并避免暂停中隐式回退其他房间。**受控同房恢复的离线版本已加入，跨房统一打包、实机恢复/回滚演练、OAuth、加密、统一升级与真实双房联机仍待后续阶段**。见 [ROOMS_M5_BACKUP_IMPORT_PHASE1.md](ROOMS_M5_BACKUP_IMPORT_PHASE1.md)、[ROOMS_M5_FULL_ARCHIVES_PHASE2.md](ROOMS_M5_FULL_ARCHIVES_PHASE2.md)。
 - [ ] M6 发布准备。
 
 ### 实施记录（2026-11-09）
 
+- **M5 第三阶段同房间受控恢复（2026-11-10）**：Dashboard 在已登录且选中目标房间后可上传同房间 ID 的旧备份、验证文件清单和 SQLite schema、显式输入该房间 ID 与归档 SHA-256 双重确认恢复；只交换当前房间 `config/` 和 `data/`，保留现有 `secrets/` 下的 Gateway Key、内部 Token。恢复前自动生成同房间回滚备份；断电中断时阻止房间直接启动，并提供故障恢复命令。正常 VPS 重启不重生 Gateway Key；完整自动恢复场景仍需实机验证。见 [ROOMS_M5_RESTORE_PHASE3.md](ROOMS_M5_RESTORE_PHASE3.md)。
 - **M5 第二阶段完整房间归档（2026-11-10；同日按用户反馈调整）**：房间数据、独立配置、附件、索引按独立目录备份，默认不包含 Gateway Key 与内部 API Token；SQLite 文件由 backup API 生成一致性副本；归档附带逐文件校验和与自定义房间 ID。旧 v1 含 Key 归档仍可只读预览，但不再要求 Key 与新环境一致。Dashboard 可在原「旧库迁移」内为当前房间创建/校验/下载完整归档，操作只临时停止本房间，其他房间继续运行；暂停房间不再自动回落另一 AI。恢复仍只允许预览，待独立恢复演练及回滚能力验收后再开放覆盖写入。见 [ROOMS_M5_FULL_ARCHIVES_PHASE2.md](ROOMS_M5_FULL_ARCHIVES_PHASE2.md)。
 - **M5 房间级导入／导出第一阶段（2026-11-10）**：主 Dashboard 现有导入和备份请求使用同一服务器已验证房间；上传／导出额外校验首次载入的房间身份，防止切换另一标签页后旧页面误写别房。数据库快照保留原版 SQLite 语义，新增 Scene/Event 分类 ZIP，文件名带房间 ID；导入/备份的双房合成回归已加入 CI。**数据库备份不等于完整房间安装包；本阶段不提供无预览的数据库覆盖恢复**。详见 [ROOMS_M5_BACKUP_IMPORT_PHASE1.md](ROOMS_M5_BACKUP_IMPORT_PHASE1.md)。
 
@@ -338,6 +339,7 @@ runtime/
 - **D007**：先基于多个相互隔离的 Serein 实例编排，不采用单物理数据库的多租户改造。
 - **D009（2026-11-09）**：M3 首期新增独立 loopback 管理控制台与独立管理员身份，暂不替换原版网页入口，不改原版挂载、核心记忆功能与数据库语义；未来复用原版功能页前必须核对房间上下文和权限。
 - **D010（2026-11-09）**：原版 Dashboard 多房间模式必须仅增添小型侧边栏按钮（与下方导航同间距），切房不重复密码，管理员身份为同站点唯一管理鉴权；创建、配置更新和房间启停尽量在网页完成。多房间为显式 opt-in，保留原版单房网页鉴权/挂载行为。客户端本地状态及 Vite 服务端临时草稿也要按房间隔离。
+- **D015（2026-11-10）**：普通 VPS 重启、现有房间备份与同房恢复**绝不旋转 Gateway Key**；恢复新 VPS 时内部 UUID/Key 可以不同，自定义房间 ID 为归属匹配字段。恢复前自动保存当前房间的回滚归档，并在恢复失败/掉电时拒绝启动半写入数据。Dashboard 同房上传不等于立即恢复，恢复还需明确房间 ID 和备份 SHA 确认。
 - **D014（2026-11-10，按用户意见修订）**：完整房间备份通过显式确认短暂停止**仅目标房间**，使数据库及附件状态一致；新格式不打包 Gateway Key/内部 API Token。恢复前只用**用户自选房间 ID**核对归属（不强制要求原服务器 UUID 或 Gateway Key 一样），再核验版本/文件完整性并明确确认目标，防止不同房间混入。数据库可能含模型供应商凭据，仍需私有 0600 目录和安全传输；未通过真实回滚演练前不提供覆盖按钮。暂停房间不能隐式显示另一 AI 的 Dashboard。
 - **D013（2026-11-10）**：导入/导出默认只操作当前 Dashboard 房间，跨标签页切换必须拒绝旧页面的上传或备份；全库 SQLite 下载与 Scene/Event 分类导出应带可读房间 ID 以免文件混放。完整房间级备份与多房归档需要附带身份清单和受控恢复，而非直接将另一间 AI 数据库覆盖写入。原版单房行为不受影响。
 - **D012（2026-11-09，按用户补充调整）**：创建房间时仅要求自选一个唯一房间 ID（如小玑 `xiaogi-main`），并生成该房间专用随机 Gateway Key。Operit 的 `X-Serein-Window-ID` 推荐填同一个 ID，便于使用，但不额外强制校验其必须相同；Window ID 保留原版窗口语义，不能成为路由/鉴权凭据。**该房间同一 Gateway Key 同时用于 Chat 和 MCP 静态 Bearer**。AI 显示名称仍在原版「设置 → 外观」编辑，不新增房间标识设置。
