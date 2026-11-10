@@ -241,6 +241,20 @@ def create_app(manager: RoomManager, *, admin_key: str,
         except RoomError:
             raise HTTPException(409, "Backup is missing, damaged, or not this room's archive") from None
 
+    @app.post("/api/rooms/{room_id}/backups/upload",
+              dependencies=[Depends(authorize), Depends(check_origin)],
+              status_code=201)
+    async def upload_room_backup(room_id: str, request: Request):
+        from .room_restore import upload_room_archive
+        if request.headers.get("content-type", "").split(";", 1)[0] not in (
+                "application/gzip", "application/octet-stream"):
+            raise HTTPException(415, "Gzip room backup required")
+        try:
+            return await upload_room_archive(manager, room_id, request.stream())
+        except (RoomError, OSError, ValueError):
+            raise HTTPException(409,
+                "Backup upload rejected: wrong room ID, corrupt archive, or file limit") from None
+
     @app.get("/api/rooms/{room_id}/backups/{name}/restore-plan",
              dependencies=[Depends(authorize)])
     def restore_plan(room_id: str, name: str):
