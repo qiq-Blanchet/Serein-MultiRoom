@@ -289,3 +289,50 @@ def test_mcp_permission_editor_is_room_scoped_and_requires_admin(console):
     assert restored.status_code == 200
     assert manager.mcp_permissions(a)["mode"] == "original"
     assert manager.mcp_permissions(b)["mode"] == "original"
+
+
+def test_full_room_backup_web_admin_api_is_room_scoped_and_does_not_show_keys(console):
+    client, manager, key, runtime, _ = console
+    a = manager.create("A", source="blank", room_slug="xiaogi-main")["room"]["room_id"]
+    b = manager.create("B", source="blank", room_slug="other-main")["room"]["room_id"]
+    with __import__("sqlite3").connect(manager.room_dir(a) / "data" / "serein.db") as db:
+        db.execute("INSERT INTO background_state(name,value_json) VALUES (?,?)",
+                   ("private-memo", '{"memo":"SECRET_FOR_A_ONLY"}'))
+        db.commit()
+
+    endpoint = f"/api/rooms/{a}/backups"
+    assert client.get(endpoint).status_code == 401
+    assert client.post(endpoint).status_code == 401
+    assert client.get(endpoint, headers=auth(key)).json()["items"] == []
+
+    manager.start(a, runtime)
+    response = client.post(endpoint, headers=auth(key))
+    assert response.status_code == 201, response.text
+    data = response.json()
+    assert data["room_id"] == a
+    assert data["restarted"] is True
+    assert "gateway_key" not in str(data)
+    assert ("stop", a) in runtime.calls
+    assert ("start", a) in runtime.calls
+    assert manager.get(a)["state"] == "ready"
+    assert manager.get(b)["state"] == "stopped"
+
+    items = client.get(endpoint, headers=auth(key)).json()["items"]
+    assert len(items) == 1
+    filename = items[0]["name"]
+    assert filename == data["name"]
+    preview = client.get(endpoint + "/" + filename + "/preview", headers=auth(key))
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["verified"] is True
+    assert preview.json()["restore_available"] is False
+    downloaded = client.get(endpoint + "/" + filename + "/download", headers=auth(key))
+    assert downloaded.status_code == 200, downloaded.text[:160]
+    assert downloaded.content[:2] == b"\\x1f\\x8b"
+    assert filename in downloaded.headers["content-disposition"]
+    assert "gateway_key" not in downloaded.headers["content-disposition"]
+
+    assert client.get(f"/api/rooms/{b}/backups/{filename}/download",
+                      headers=auth(key)).status_code == 404
+    assert client.get(f"/api/rooms/{b}/backups/{filename}/preview",
+                      headers=auth(key)).status_code == 409
+    assert client.post(endpoint,headers={**auth(key),"Origin":"https://foreign.invalid"}).status_code == 403
