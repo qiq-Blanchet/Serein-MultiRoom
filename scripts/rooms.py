@@ -56,6 +56,21 @@ def parser_for_rooms():
         cmd.add_argument("room_id", help="Immutable room UUID, not another AI room")
         if verb == "backup-preview":
             cmd.add_argument("filename", help="Backup filename returned by backups")
+    restore_plan = commands.add_parser("restore-plan",
+        help="Verify full-room backup compatibility without changing data")
+    restore_plan.add_argument("room_id")
+    restore_plan.add_argument("filename")
+    restore = commands.add_parser("restore",
+        help="Restore exact same room ID after checksum confirmation; preserve Gateway Key")
+    restore.add_argument("room_id")
+    restore.add_argument("filename")
+    restore.add_argument("--confirm-room-id", required=True,
+                         help="Exact user-chosen room ID (example xiaogi-main)")
+    restore.add_argument("--archive-sha256", required=True,
+                         help="Full SHA-256 from restore-plan")
+    recover = commands.add_parser("restore-recover",
+        help="Recover previous data after a crashed restore; room must be stopped")
+    recover.add_argument("room_id")
     gateway = commands.add_parser("gateway-start",
                                   help="Start the shared Chat/MCP proxy bound to loopback")
     gateway.add_argument("--port", type=int, default=18219)
@@ -167,6 +182,18 @@ def main(argv=None):
     elif args.command == "backup-preview":
         from serein.room_archive import preview_room_backup
         result = preview_room_backup(manager, args.room_id, args.filename)
+    elif args.command == "restore-plan":
+        from serein.room_restore import plan_room_restore
+        result = plan_room_restore(manager, args.room_id, args.filename)
+    elif args.command == "restore":
+        from serein.room_restore import restore_room_backup
+        result = restore_room_backup(
+            manager, args.room_id, args.filename, runtime,
+            confirm_slug=args.confirm_room_id,
+            expected_sha256=args.archive_sha256)
+    elif args.command == "restore-recover":
+        from serein.room_restore import recover_room_restore
+        result = recover_room_restore(manager, args.room_id, runtime)
     elif args.command == "stop":
         result = manager.stop(args.room_id, runtime)
     else:
