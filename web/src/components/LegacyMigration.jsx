@@ -126,7 +126,9 @@ export function LegacyMigration(){
           if(!response.ok)throw Error('旧库导出失败；如已切换房间请刷新页面。');
           const blob=await response.blob();
           const url=URL.createObjectURL(blob),link=document.createElement('a');
-          link.href=url;link.download='ombre-legacy-source.zip';
+          link.href=url;link.download=roomLabel
+            ? 'ombre-legacy-source-'+roomLabel.replace(/[^a-z0-9-]/g,'').slice(0,48)+'.zip'
+            : 'ombre-legacy-source.zip';
           document.body.appendChild(link);link.click();link.remove();
           setTimeout(()=>URL.revokeObjectURL(url),60_000);
         }catch(error){setMessage(error.message);}
