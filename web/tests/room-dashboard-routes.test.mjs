@@ -386,3 +386,50 @@ test('room restore through Dashboard requires correct signed selected room and c
     assert.ok(sent.every(row=>row.url.includes('/api/rooms/'+A+'/backups/')));
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+test('portable room archive upload streams to only selected room, never changes keys', async()=>{
+  const root=mkdtempSync(join(tmpdir(),'dashboard-upload-')),path=join(root,'routes.json');
+  manifest(path,[A,B]);
+  const bytes=Buffer.from('SYNTHETIC_GZIP_TEST_CHUNKS');
+  const forwarded=[];
+  const handler=async (url,options)=>{
+    const content=[];
+    for await(const part of options.body)content.push(Buffer.from(part));
+    forwarded.push({
+      url:String(url),auth:options.headers.Authorization,
+      type:options.headers['Content-Type'],body:Buffer.concat(content),
+    });
+    return new Response(JSON.stringify({
+      room_id:A,room_slug:'xiaogi-main',verified:true,
+      name:'20261110T140000Z-aabbccddeeff.tar.gz',includes_secrets:false,
+    }),{status:201});
+  };
+  function uploadReq(cookie,header){
+    return Object.assign(Readable.from([bytes]),{
+      method:'POST',headers:{
+        host:'127.0.0.1:18221',
+        'content-type':'application/gzip',
+        cookie, 'x-serein-target-room':header,
+        'content-length':String(bytes.length),
+      },
+    });
+  }
+  try{
+    let response=capture();
+    await dashboardRoomEndpoint(uploadReq(roomCookie(KEY,A),A),response,{
+      ...options(path,handler),path:'/__serein/rooms/'+A+'/backups/upload',
+    });
+    assert.equal(response.statusCode,201);
+    assert.equal(JSON.parse(response.body).room_slug,'xiaogi-main');
+    assert.equal(forwarded.length,1);
+    assert.equal(forwarded[0].auth,'Bearer '+KEY);
+    assert.equal(forwarded[0].type,'application/gzip');
+    assert.deepEqual(forwarded[0].body,bytes);
+    response=capture();
+    await dashboardRoomEndpoint(uploadReq(roomCookie(KEY,B),A),response,{
+      ...options(path,handler),path:'/__serein/rooms/'+A+'/backups/upload',
+    });
+    assert.equal(response.statusCode,409);
+    assert.equal(forwarded.length,1);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
