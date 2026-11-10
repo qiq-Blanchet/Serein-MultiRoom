@@ -27,6 +27,7 @@ export function LegacyMigration(){
   const [archiveBusy,setArchiveBusy]=useState(false);
   const [archiveError,setArchiveError]=useState('');
   const [archivePreview,setArchivePreview]=useState(null);
+  const [restoreBusy,setRestoreBusy]=useState(false);
   useEffect(()=>{
     let active=true;
     fetch('/__serein/rooms/current',{credentials:'same-origin',cache:'no-store'})
@@ -72,11 +73,41 @@ export function LegacyMigration(){
   async function previewArchive(name){
     setArchiveBusy(true);setArchiveError('正在校验备份文件清单……');
     try{
-      const result=await archiveRequest('/'+name+'/preview');
+      const result=await archiveRequest('/'+name+'/restore-plan');
       setArchivePreview(result);
       setArchiveError(result.verified?'清单和 SHA-256 校验通过。':'备份校验未通过。');
     }catch(error){setArchivePreview(null);setArchiveError(error.message);}
     finally{setArchiveBusy(false);}
+  }
+  async function restoreArchive(){
+    const plan=archivePreview;
+    if(!plan || !plan.restore_available || restoreBusy || archiveBusy)return;
+    const slug=roomLabel;
+    if(plan.room_slug!==slug || plan.room_id!==archiveRoomId){
+      setArchiveError('恢复目标已变化，请刷新页面重新预览。');return;
+    }
+    const entered=window.prompt(
+      '即将用备份覆盖【'+slug+'】当前的记忆和配置。系统会先做回滚备份，只重启这间房；Gateway Key 保持原样。\n请输入准确的房间 ID 确认：',
+      '');
+    if(entered!==slug){setArchiveError('房间 ID 未确认，恢复已取消。');return;}
+    if(!window.confirm('最后确认：恢复【'+slug+'】到选定备份？目前未备份的新记忆会被替换，但恢复前会额外保存一份回滚归档。')){
+      setArchiveError('恢复已取消。');return;
+    }
+    setRestoreBusy(true);setArchiveBusy(true);
+    setArchiveError('正在校验并恢复当前房间；请勿刷新或重复提交……');
+    try{
+      const result=await archiveRequest('/'+plan.name+'/restore',{
+        method:'POST',
+        body:JSON.stringify({confirm_room_id:slug,expected_sha256:plan.archive_sha256}),
+      });
+      setArchivePreview(null);
+      await refreshArchives();
+      setArchiveError(result.restored?
+        '恢复完成。Gateway Key 未变化。恢复前回滚备份：'+result.rollback_backup:
+        '服务器没有确认恢复完成，请检查房间状态。');
+    }catch(error){
+      setArchiveError(error.message+'；若房间未自动启动，请使用恢复修复命令检查。');
+    }finally{setRestoreBusy(false);setArchiveBusy(false);}
   }
   async function downloadBackup(){
     if(backupBusy)return;
@@ -221,13 +252,21 @@ export function LegacyMigration(){
           download={'serein-'+roomLabel+'-'+item.name}>下载</a>
       </div>)}
       {!archiveItems.length&&<p className="import-help">这间房暂时还没有完整归档。</p>}
-      {archivePreview&&<p className="import-help">
-        已校验：{archivePreview.room_slug} · {archivePreview.files} 个文件 ·
-        {(archivePreview.total_uncompressed_bytes/1048576).toFixed(1)} MiB（解压后）。
-        {archivePreview.same_installation===false?'这是同房间 ID 的其他安装来源备份，可预览，不要求原 Gateway Key。':''}
-        {archivePreview.includes_secrets?'注意：这是旧格式归档，仍含旧 Gateway Key，请勿公开分享。':''}
-        此阶段只提供安全预览，不直接覆盖恢复数据库。
-      </p>}
+      {archivePreview&&<div className="import-help">
+        <p>已校验：{archivePreview.room_slug} · {archivePreview.files} 个文件 ·
+          {(archivePreview.total_uncompressed_bytes/1048576).toFixed(1)} MiB（解压后）。
+          {archivePreview.same_installation===false?' 这是同房间 ID 的其他安装来源备份；新旧 Gateway Key 不必一致。':''}
+          {archivePreview.includes_secrets?' 注意：这是旧格式归档，含旧 Gateway Key；恢复时不会覆盖现有 Key。':''}
+        </p>
+        <p>{archivePreview.schema_compatible?
+          '当前数据库结构兼容，恢复前会自动制作当前房间的回滚归档。':
+          '数据库结构不兼容或备份格式太旧，暂不允许自动恢复；请使用兼容版本做受控迁移。'}</p>
+        {archivePreview.restore_available&&<button type="button"
+          disabled={archiveBusy||restoreBusy}
+          onClick={restoreArchive}>
+          {restoreBusy?'正在安全恢复……':'恢复到当前房间（需要再次确认房间 ID）'}
+        </button>}
+      </div>}
       <p role="status">{archiveError}</p>
     </details>}
     <p>旧库 ZIP 包含所选路径中的全部文件，可能含配置和密钥；数据库备份也包含记忆与模型密钥，请妥善保存。图片、向量索引和安装账号文件需随安装目录另行备份；数据库备份不是一键恢复整站的安装包。</p>
