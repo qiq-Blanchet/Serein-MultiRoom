@@ -336,3 +336,55 @@ def test_full_room_backup_web_admin_api_is_room_scoped_and_does_not_show_keys(co
     assert client.get(f"/api/rooms/{b}/backups/{filename}/preview",
                       headers=auth(key)).status_code == 409
     assert client.post(endpoint,headers={**auth(key),"Origin":"https://foreign.invalid"}).status_code == 403
+
+
+
+def test_restore_requires_room_id_and_sha_with_same_dashboard_admin(console):
+    import json
+    from serein.core.store import Store
+    client, manager, key, runtime, _ = console
+    a = manager.create("A", source="blank", room_slug="xiaogi-main")["room"]["room_id"]
+    b = manager.create("B", source="blank", room_slug="other-main")["room"]["room_id"]
+    db_a = manager.room_dir(a) / "data" / "serein.db"
+    db_b = manager.room_dir(b) / "data" / "serein.db"
+    with Store(db_a) as store:
+        store.create("old-scene", "scene", "Before", "BEFORE RESTORE")
+    with Store(db_b) as store:
+        store.create("other-scene", "scene", "Other", "B PRIVATE")
+    manager.start(a, runtime)
+    base = f"/api/rooms/{a}/backups"
+    created = client.post(base, headers=auth(key))
+    assert created.status_code == 201
+    name = created.json()["name"]
+    with Store(db_a) as store:
+        store.create("new-scene", "scene", "After", "AFTER BACKUP")
+    target = base + "/" + name
+    assert client.get(target + "/restore-plan").status_code == 401
+    plan = client.get(target + "/restore-plan", headers=auth(key))
+    assert plan.status_code == 200
+    assert plan.json()["restore_available"] is True
+    sha = plan.json()["archive_sha256"]
+    assert client.post(target + "/restore", json={
+        "confirm_room_id": "xiaogi-main", "expected_sha256": sha,
+    }).status_code == 401
+    assert client.post(target + "/restore", headers=auth(key), json={
+        "confirm_room_id": "other-main", "expected_sha256": sha,
+    }).status_code == 409
+    assert client.post(target + "/restore", headers=auth(key), json={
+        "confirm_room_id": "xiaogi-main", "expected_sha256": "f" * 64,
+    }).status_code == 409
+    result = client.post(target + "/restore", headers=auth(key), json={
+        "confirm_room_id": "xiaogi-main", "expected_sha256": sha,
+    })
+    assert result.status_code == 200, result.text
+    assert result.json()["gateway_key_unchanged"] is True
+    assert result.json()["rollback_backup"] != name
+    with Store(db_a) as store:
+        ids = {r[0] for r in store.conn.execute("SELECT id FROM documents")}
+        assert "old-scene" in ids and "new-scene" not in ids
+    with Store(db_b) as store:
+        assert store.conn.execute(
+            "SELECT id FROM documents WHERE id='other-scene'"
+        ).fetchone()
+    assert manager.get(a)["state"] == "ready"
+    assert manager.get(b)["state"] == "stopped"
