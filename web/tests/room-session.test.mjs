@@ -55,7 +55,8 @@ test('only a ready room is selected, forged or stopped selection fails closed', 
     mkRoutes(path);
     const routes = readyRooms(path);
     assert.equal(effectiveRoom(roomCookie(KEY, B),KEY,routes).room_id,B);
-    assert.equal(effectiveRoom(roomCookie(KEY, B),KEY,[routes[0]]).room_id,A);
+    assert.equal(effectiveRoom(roomCookie(KEY, B),KEY,[routes[0]]),null);
+    assert.equal(effectiveRoom('',KEY,[routes[0]]).room_id,A);
     assert.equal(effectiveRoom('',KEY,[]),null);
     assert.equal(routes[0].room_id,A);
     assert.equal(readyRooms(path+'.missing').length,0);
