@@ -1,6 +1,7 @@
 import { narrativeRolls as fallbackNarrativeRolls } from "../data/narrative.js";
 import { chronologicalSources } from "./narrativeAppearance.js";
 import { narrativeRequest } from './narrativeErrors.js';
+import { roomTargetHeaders } from "./roomScopedStorage.js";
 
 const romanVolumes = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
 const visualTones = ["paper", "mist", "white", "fog", "ink"];
@@ -294,7 +295,7 @@ export async function uploadNarrativeMaterial(file) {
   }
   const response = await fetch("/__serein/narrative-material-upload", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...roomTargetHeaders() },
     body: JSON.stringify({
       filename: file.name,
       contentType: file.type || "application/octet-stream",
