@@ -388,3 +388,30 @@ def test_restore_requires_room_id_and_sha_with_same_dashboard_admin(console):
         ).fetchone()
     assert manager.get(a)["state"] == "ready"
     assert manager.get(b)["state"] == "stopped"
+
+
+def test_streamed_room_backup_upload_is_non_destructive_and_rejects_foreign_room(console):
+    from serein.room_archive import backup_file
+    from serein.core.store import Store
+    client, manager, key, runtime, _ = console
+    a = manager.create("A", source="blank", room_slug="xiaogi-main")["room"]["room_id"]
+    b = manager.create("B", source="blank", room_slug="other-main")["room"]["room_id"]
+    with Store(manager.room_dir(a) / "data" / "serein.db") as store:
+        store.create("scene-a", "scene", "Synthetic", "A_PRIVATE")
+    created = client.post(f"/api/rooms/{a}/backups", headers=auth(key))
+    assert created.status_code == 201
+    archive = backup_file(manager, a, created.json()["name"]).read_bytes()
+    url = f"/api/rooms/{a}/backups/upload"
+    content_type = {"Content-Type": "application/gzip"}
+    assert client.post(url, headers=content_type, content=archive).status_code == 401
+    response = client.post(url, headers={**auth(key), **content_type}, content=archive)
+    assert response.status_code == 201, response.text
+    assert response.json()["room_slug"] == "xiaogi-main"
+    assert response.json()["verified"] is True
+    foreign = client.post(f"/api/rooms/{b}/backups/upload",
+                          headers={**auth(key), **content_type}, content=archive)
+    assert foreign.status_code == 409
+    assert manager.get(a)["state"] == "stopped"
+    assert manager.get(b)["state"] == "stopped"
+    with Store(manager.room_dir(a) / "data" / "serein.db") as store:
+        assert store.conn.execute("SELECT id FROM documents WHERE id='scene-a'").fetchone()
