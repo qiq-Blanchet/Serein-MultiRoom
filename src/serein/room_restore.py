@@ -11,6 +11,7 @@ that same room. Room startup is blocked until administrator recovery.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
 import json
@@ -32,6 +33,48 @@ _SCOPE = ("config", "data")
 _JOURNAL = ".restore-journal.json"
 _SHA = re.compile(r"^[a-f0-9]{64}$")
 _LOCK_CONFLICT = "已有任务运行，请不要双开。"
+
+
+async def upload_room_archive(manager, room_id, chunks):
+    """Stream a backup into only this room's private backup directory.
+
+    Upload is NON-destructive: it never changes memory, config, Gateway Key
+    or container state. The uploaded tar is accepted only after the same
+    room-slug and every payload checksum are verified. Client filenames are
+    never trusted or used as disk paths.
+    """
+    _, _, directory = _room_paths(manager, room_id)
+    name = (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") +
+            "-" + uuid4().hex[:12] + ".tar.gz")
+    final = directory / name
+    pending = directory / ("." + uuid4().hex + ".uploading")
+    total = 0
+    try:
+        with pending.open("xb") as stream:
+            os.chmod(pending, 0o600)
+            async for block in chunks:
+                if not isinstance(block, bytes):
+                    raise RoomError("Invalid upload bytes")
+                total += len(block)
+                if total > MAX_BYTES:
+                    raise RoomError("Room upload exceeds maximum archive size")
+                stream.write(block)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if total < 50:
+            raise RoomError("Uploaded backup is too small")
+        os.replace(pending, final)
+        try:
+            preview = preview_room_backup(manager, room_id, name)
+        except BaseException:
+            final.unlink(missing_ok=True)
+            raise
+        return {"room_id": room_id, "name": name, "bytes": total,
+                "room_slug": preview["room_slug"], "verified": True,
+                "includes_secrets": preview["includes_secrets"],
+                "archive_sha256": preview["archive_sha256"]}
+    finally:
+        pending.unlink(missing_ok=True)
 
 
 def _schema(db):
