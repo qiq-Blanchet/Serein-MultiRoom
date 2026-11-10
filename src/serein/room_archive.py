@@ -241,6 +241,7 @@ def preview_room_backup(manager, room_id, name):
                 raise RoomError("Backup file list does not match manifest")
             seen = set()
             total = 0
+            key_bytes = None
             for member, entry in zip(members[1:], entries):
                 relative = entry.get("path")
                 if (not isinstance(relative, str) or relative.startswith("/") or
@@ -257,11 +258,21 @@ def preview_room_backup(manager, room_id, name):
                 stream = archive.extractfile(member)
                 if stream is None:
                     raise RoomError("Unreadable backup member")
+                if relative == "secrets/gateway-key":
+                    if member.size > 4096:
+                        raise RoomError("Invalid backup Gateway Key length")
+                    key_bytes = archive.extractfile(member).read()
                 digest = sha256()
                 for block in iter(lambda: stream.read(1024 * 1024), b""):
                     digest.update(block)
                 if digest.hexdigest() != entry.get("sha256"):
                     raise RoomError("Backup checksum mismatch")
+            required = {"data/serein.db", "config/config.toml",
+                        "secrets/api-token", "secrets/gateway-key"}
+            if not required.issubset(seen):
+                raise RoomError("Backup is missing required room files")
+            if not key_bytes or sha256(key_bytes.strip()).hexdigest() != expected_key:
+                raise RoomError("Backup Gateway Key content does not match room identity")
     except (tarfile.TarError, OSError, ValueError, KeyError, TypeError,
             json.JSONDecodeError) as exc:
         raise RoomError("Invalid or damaged room archive") from exc
