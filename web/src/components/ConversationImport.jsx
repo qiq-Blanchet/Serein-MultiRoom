@@ -20,6 +20,15 @@ export function ConversationImport({onImported}) {
   const running=['queued','running'].includes(job?.task?.status);
   const mounted=useRef(true),notified=useRef(new Set()),polling=useRef(false);
   const [tagErrors,setTagErrors]=useState([]);
+  const [roomLabel,setRoomLabel]=useState('');
+  useEffect(()=>{
+    let active=true;
+    fetch('/__serein/rooms/current',{credentials:'same-origin',cache:'no-store'})
+      .then(async res=>res.ok && (res.headers.get('content-type')||'').includes('application/json')?res.json():null)
+      .then(value=>{if(active&&value?.room_id)setRoomLabel(value.room_slug||value.room_id);})
+      .catch(()=>{});
+    return()=>{active=false;};
+  },[]);
   useEffect(()=>{setLargeBatch(job?.task?.arguments?.large_batch===true);},[job?.id]);
   async function refresh() {
     const result=await request();if(!mounted.current)return;
@@ -78,8 +87,8 @@ export function ConversationImport({onImported}) {
     catch(error){setStatus(error.message);}finally{setBusy(false);}
   }
   return <div className="conversation-import">
-    <div className="settings-group__heading"><h4>对话与记忆导入</h4>
-      <p>历史聊天导入后，可立即在后台从头摘要，或暂不处理并跳到末尾；Operit 记忆备份逐条保留为 Scene，正文不改写。</p></div>
+    <div className="settings-group__heading"><h4>对话与记忆导入{roomLabel?' · '+roomLabel:''}</h4>
+      <p>仅导入当前 AI 房间。其他标签页切换房间后，旧页面上传会被拒绝，请刷新确认。历史聊天导入后可从头摘要；Operit 记忆备份逐条保留为 Scene，正文不改写。</p></div>
     <label className="settings-field"><span>文件类型</span><select disabled={busy} value={mode} onChange={event=>setMode(event.target.value)}>
       <option value="auto">自动识别</option><option value="conversation">聊天记录</option><option value="operit">Operit 记忆库</option></select></label>
     <label className="settings-toggle"><span><strong>Operit 导入后自动打标</strong>
