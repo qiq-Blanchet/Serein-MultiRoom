@@ -62,3 +62,12 @@ function scoped(storage) {
 
 export function roomLocalStorage() { return scoped(window.localStorage); }
 export function roomSessionStorage() { return scoped(window.sessionStorage); }
+
+/**
+ * Guards import and backup requests against a room switch in another tab.
+ * This is not a room-selection credential: the server still uses its
+ * authenticated, signed room context and rejects a stale/missing marker.
+ */
+export function roomTargetHeaders() {
+  return roomId ? { "X-Serein-Target-Room": roomId } : {};
+}
