@@ -873,6 +873,8 @@ function sereinMemoryBridge() {
       });
 
       server.middlewares.use("/__serein/personal", async (request, response) => {
+        if(new URL(request.url||"/","http://localhost").pathname==="/import"
+           && !requireRoomMatch(request,response))return;
         response.setHeader("Content-Type", "application/json; charset=utf-8");
         try {
           const url = new URL(request.url, "http://localhost");
@@ -1274,6 +1276,7 @@ function sereinMemoryBridge() {
       });
 
       server.middlewares.use("/__serein/narrative-material-upload", async (request, response) => {
+        if(!requireRoomMatch(request,response))return;
         response.setHeader("Content-Type", "application/json; charset=utf-8");
         if (request.method !== "POST") {
           response.statusCode = 405;
