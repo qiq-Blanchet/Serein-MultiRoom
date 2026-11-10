@@ -650,5 +650,8 @@
   "tests/test_anthropic_thinking_usage.py",
   "web/src/components/McpPermissionSettings.jsx",
   "tests/test_room_services_isolation.py",
-  "docs/ROOMS_M4_PHASE1.md"
+  "docs/ROOMS_M4_PHASE1.md",
+  "docs/ROOMS_M5_BACKUP_IMPORT_PHASE1.md",
+  "tests/test_room_import_export.py",
+  "web/tests/room-import-export.test.mjs"
 ]
