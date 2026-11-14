@@ -199,7 +199,7 @@ def run():
                 wait_status(DASHBOARD + "/ready", timeout=120)
                 assert request(DASHBOARD + "/")[0] == 401
                 status, page = request(DASHBOARD + "/", basic=True)
-                assert status == 200 and "html" in page.lower()
+                assert status == 200 and "html" in page.lower(), (status, page[:350])
                 status, data = request(DASHBOARD + "/__serein/rooms", basic=True)
                 assert status == 200, (status, data[:300])
                 listing = json.loads(data)
