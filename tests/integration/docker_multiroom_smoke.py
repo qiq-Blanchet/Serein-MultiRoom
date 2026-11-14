@@ -812,8 +812,56 @@ def verify_background_scheduler(manager: RoomManager, runtime: DockerRuntime,
             assert processed == 2, processed
         assert request(GATEWAY + "/v1/models", token=a_key)[0] == 200
         assert request(GATEWAY + "/v1/models", token=b_key)[0] == 200
-        print("M6 Phase4 PASS: actual Docker schedule, three fake-model stages, "
-              "B-only Event; paused A untouched", flush=True)
+
+        print("M6 Phase4: independently restart B after Event settlement", flush=True)
+        completed_calls = len(calls)
+        with Store(db_b, read_only=True) as store:
+            saved_event_ids = [row["id"] for row in store.conn.execute(
+                "SELECT id FROM documents WHERE kind='event' AND lifecycle='active'"
+            )]
+        assert len(saved_event_ids) == 1, saved_event_ids
+        manager.stop(bid, runtime)
+        assert request(GATEWAY + "/v1/models", token=b_key)[0] == 401
+        assert request(GATEWAY + "/v1/models", token=a_key)[0] == 200
+        manager.start(bid, runtime, wait_seconds=150)
+        assert request(GATEWAY + "/v1/models", token=b_key)[0] == 200
+        # model_jobs restarts with the persisted B DB. Verify the next real
+        # scheduled pass marks today's settled queue current, without replaying
+        # any accepted model work or duplicating the Event.
+        deadline = time.monotonic() + 45
+        settled_again = False
+        while time.monotonic() < deadline:
+            with Store(db_b, read_only=True) as store:
+                marker = store.conn.execute(
+                    "SELECT completed FROM pipeline_schedule "
+                    "ORDER BY day DESC LIMIT 1"
+                ).fetchone()
+                settled_again = bool(marker and marker["completed"] == 1)
+            if settled_again:
+                break
+            time.sleep(2)
+        assert settled_again, "B restarted but daily pipeline scheduler did not resume"
+        with fake.lock:
+            assert len(fake.calls) == completed_calls, (
+                "Background work charged again after successful settlement",
+                fake.calls[completed_calls:], fake.errors,
+            )
+        with Store(db_b, read_only=True) as store:
+            after_event_ids = [row["id"] for row in store.conn.execute(
+                "SELECT id FROM documents WHERE kind='event' AND lifecycle='active'"
+            )]
+            processed = store.conn.execute(
+                "SELECT COUNT(*) FROM raw_processing p JOIN raw_events r ON r.id=p.raw_id "
+                "WHERE r.source='m6-background' AND p.outcome!='auto_boundary'"
+            ).fetchone()[0]
+            assert after_event_ids == saved_event_ids, after_event_ids
+            assert processed == 2, processed
+        with Store(db_a, read_only=True) as store:
+            assert store.conn.execute(
+                "SELECT COUNT(*) FROM documents WHERE kind='event'"
+            ).fetchone()[0] == 0
+        print("M6 Phase4 PASS: real Docker timers, B-only Event, paused A; "
+              "B restart preserved summary and did not repeat model calls", flush=True)
 
 def run():
     assert shutil.which("docker"), "Docker executable is required"
