@@ -627,6 +627,194 @@ def verify_dynamic_clone(manager: RoomManager, runtime: DockerRuntime,
           flush=True)
 
 
+
+class SyntheticPipelineUpstream:
+    """Return validated fake Router/Curator/Writer output over real private HTTP."""
+
+    def __init__(self, bridge_ip: str, model_roles: dict):
+        self.model_roles = model_roles
+        self.calls = []
+        self.errors = []
+        self.lock = threading.Lock()
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                status = 200
+                try:
+                    if self.path != "/v1/chat/completions":
+                        raise ValueError("Unexpected mock model route")
+                    size = int(self.headers.get("Content-Length", "0"))
+                    if size < 1 or size > 1_000_000:
+                        raise ValueError("Unexpected mock request size")
+                    message = json.loads(self.rfile.read(size))
+                    model = message["model"]
+                    database, role = owner.model_roles[model]
+                    with Store(database, read_only=True) as store:
+                        pending = store.conn.execute(
+                            "SELECT request_json FROM pipeline_jobs "
+                            "WHERE output_json IS NULL "
+                            "AND json_extract(request_json,'$.role')=? "
+                            "ORDER BY rowid DESC LIMIT 1", (role,)
+                        ).fetchone()
+                    if pending is None:
+                        raise ValueError("No durable pending model task for " + role)
+                    # Reuse the original project's valid synthetic contract
+                    # generator; never generate a paid third-party request.
+                    from test_public_features import output_for
+                    task = json.loads(pending["request_json"])
+                    content = json.dumps(output_for(role, task), ensure_ascii=False)
+                    with owner.lock:
+                        owner.calls.append((model, role))
+                    reply = {
+                        "id": "m6-background-local-" + model,
+                        "object": "chat.completion", "created": 1794650000,
+                        "model": model,
+                        "choices": [{"index": 0, "message": {
+                            "role": "assistant", "content": content,
+                        }, "finish_reason": "stop"}],
+                    }
+                    encoded = json.dumps(reply).encode()
+                except Exception as exc:
+                    with owner.lock:
+                        owner.errors.append(type(exc).__name__ + ": " + str(exc)[:160])
+                    status, encoded = 500, b'{"error":"CI mock model failed"}'
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                try:
+                    self.wfile.write(encoded)
+                except BrokenPipeError:
+                    pass
+
+            def log_message(self, format, *args):
+                pass
+
+        self.server = ThreadingHTTPServer((bridge_ip, 0), Handler)
+        self.thread = threading.Thread(
+            target=self.server.serve_forever, daemon=True,
+            name="m6-background-fake-model",
+        )
+        self.base_url = f"http://{bridge_ip}:{self.server.server_port}/v1"
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *args):
+        self.server.shutdown()
+        self.thread.join(timeout=5)
+        self.server.server_close()
+
+
+def verify_background_scheduler(manager: RoomManager, runtime: DockerRuntime,
+                                aid: str, bid: str, a_key: str, b_key: str):
+    """Prove the REAL model_jobs timer calls 3 model roles for B, never paused A."""
+    from serein.compat.raw_archive import raw_archive
+    from serein.config import Settings
+
+    db_a = manager.room_dir(aid) / "data" / "serein.db"
+    db_b = manager.room_dir(bid) / "data" / "serein.db"
+    model_roles = {
+        "m6b-router": (db_b, "track_router"),
+        "m6b-curator": (db_b, "event_curator"),
+        "m6b-writer": (db_b, "event_writer"),
+        "m6a-router": (db_a, "track_router"),
+        "m6a-curator": (db_a, "event_curator"),
+        "m6a-writer": (db_a, "event_writer"),
+    }
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    with SyntheticPipelineUpstream(runtime.network_gateway_ip(manager), model_roles) as fake:
+        # B already has old real Chat archive material from Phase 3. Mark that
+        # as a safe no-backfill boundary before adding new eligible originals.
+        save_settings(db_b, {"pipeline": {"auto_enabled": False}})
+        save_settings(db_b, {"pipeline": {"auto_enabled": True}})
+        for role, text in (
+            ("user", "Book club plan M6_BACKGROUND_PRIVATE_BETA"),
+            ("assistant", "Agreed to plan M6_BACKGROUND_PRIVATE_BETA"),
+        ):
+            raw_archive(Settings(db_b, writable=True)).ingest([{
+                "source_event_id": "m6-background-" + role,
+                "session_id": "m6-background-only",
+                "role": role, "text": text,
+                "created_at": "2025-01-02T10:00:00Z"
+                if role == "user" else "2025-01-02T10:01:00Z",
+            }], source="m6-background")
+        def configure(db, label, enabled):
+            names = [f"m6{label}-{role}" for role in ("router", "curator", "writer")]
+            save_settings(db, {
+                "upstreams": [{
+                    "name": "alpha" if label == "a" else "beta",
+                    "base_url": fake.base_url, "api_key": "m6-synthetic-not-real",
+                    "models": [("alpha" if label == "a" else "beta")
+                               + "-only-model", *names],
+                }],
+                "assignments": dict(zip(
+                    ("track_router", "event_curator", "event_writer"), names
+                )),
+                "pipeline": {"auto_enabled": enabled, "execution_mode": "api"},
+            })
+        # The A timer is allowed to start, but auto_enabled=False vetoes its
+        # work. The B timer has eligible material before its role models exist.
+        configure(db_a, "a", False)
+        configure(db_b, "b", True)
+        print("M6 Phase4: waiting for actual Docker background timers", flush=True)
+        deadline = time.monotonic() + 175
+        event_body = None
+        batch_statuses = []
+        while time.monotonic() < deadline:
+            with Store(db_b, read_only=True) as store:
+                events = store.conn.execute(
+                    "SELECT id FROM documents WHERE kind='event' AND lifecycle='active'"
+                ).fetchall()
+                if events:
+                    event_body = str(store.read(events[-1]["id"]))
+                present = store.conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='pipeline_batches'"
+                ).fetchone()
+                if present:
+                    batch_statuses = [tuple(row) for row in store.conn.execute(
+                        "SELECT status,substr(COALESCE(result_json,''),1,150) "
+                        "FROM pipeline_batches ORDER BY rowid"
+                    )]
+            if event_body:
+                break
+            time.sleep(3)
+        with fake.lock:
+            calls, errors = list(fake.calls), list(fake.errors)
+        assert event_body is not None, (
+            "Background model task did not settle B",
+            {"batches": batch_statuses, "calls": calls, "errors": errors},
+        )
+        assert "M6_BACKGROUND_PRIVATE_BETA" in event_body, event_body[:350]
+        assert "M6_BACKGROUND_PRIVATE_ALPHA" not in event_body
+        b_roles = [role for model, role in calls if model.startswith("m6b-")]
+        assert {"track_router", "event_curator", "event_writer"} <= set(b_roles), (
+            "Not all 3 background model stages ran", calls, errors,
+        )
+        assert not any(model.startswith("m6a-") for model, _ in calls), calls
+        with Store(db_a, read_only=True) as store:
+            assert store.conn.execute(
+                "SELECT COUNT(*) FROM documents WHERE kind='event'"
+            ).fetchone()[0] == 0
+            assert store.conn.execute(
+                "SELECT COUNT(*) FROM raw_events WHERE text LIKE '%M6_BACKGROUND_PRIVATE_BETA%'"
+            ).fetchone()[0] == 0
+        with Store(db_b, read_only=True) as store:
+            assert store.conn.execute(
+                "SELECT COUNT(*) FROM raw_events WHERE source='m6-background'"
+            ).fetchone()[0] == 2
+            processed = store.conn.execute(
+                "SELECT COUNT(*) FROM raw_processing p JOIN raw_events r ON r.id=p.raw_id "
+                "WHERE r.source='m6-background' AND p.outcome!='auto_boundary'"
+            ).fetchone()[0]
+            assert processed == 2, processed
+        assert request(GATEWAY + "/v1/models", token=a_key)[0] == 200
+        assert request(GATEWAY + "/v1/models", token=b_key)[0] == 200
+        print("M6 Phase4 PASS: actual Docker schedule, three fake-model stages, "
+              "B-only Event; paused A untouched", flush=True)
+
 def run():
     assert shutil.which("docker"), "Docker executable is required"
     subprocess.run(["docker", "info"], check=True, capture_output=True)
@@ -751,6 +939,8 @@ def run():
                                  a["gateway_key"], b["gateway_key"])
                 verify_dynamic_clone(manager, runtime, aid, bid,
                                      a["gateway_key"], b["gateway_key"], containers)
+                verify_background_scheduler(manager, runtime, aid, bid,
+                                            a["gateway_key"], b["gateway_key"])
             print("M6 Docker PASS: real rooms, MCP, Gateway and Dashboard isolated", flush=True)
         except BaseException:
             print("M6 Docker diagnostic: status and tail of synthetic test containers", flush=True)
