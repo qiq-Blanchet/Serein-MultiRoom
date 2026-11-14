@@ -198,7 +198,8 @@ def run():
                 runtime.start_dashboard(manager, port=18217)
                 wait_status(DASHBOARD + "/ready", timeout=120)
                 assert request(DASHBOARD + "/")[0] == 401
-                status, page = request(DASHBOARD + "/", basic=True)
+                status, page = request(DASHBOARD + "/", basic=True,
+                                       headers={"Accept": "text/html"})
                 assert status == 200 and "html" in page.lower(), (status, page[:350])
                 status, data = request(DASHBOARD + "/__serein/rooms", basic=True)
                 assert status == 200, (status, data[:300])
