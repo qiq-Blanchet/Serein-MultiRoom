@@ -210,6 +210,25 @@ def run():
                 assert "gateway_key" not in data.lower()
                 assert manager.get(aid)["state"] == manager.get(bid)["state"] == "ready"
             print("M6 Docker PASS: real rooms, MCP, Gateway and Dashboard isolated", flush=True)
+        except BaseException:
+            print("M6 Docker diagnostic: status and tail of synthetic test containers", flush=True)
+            for name in containers:
+                state = subprocess.run(
+                    ["docker", "container", "inspect", "--format",
+                     "{{.State.Status}} exit={{.State.ExitCode}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}",
+                     name],
+                    capture_output=True, text=True, check=False,
+                )
+                print(f"[{name}] {state.stdout.strip() or 'not created'}", flush=True)
+                logs = subprocess.run(
+                    ["docker", "container", "logs", "--tail", "55", name],
+                    capture_output=True, text=True, check=False,
+                )
+                if logs.stdout or logs.stderr:
+                    # This CI generates synthetic keys, dummy models, and only
+                    # synthetic memory; it never mounts any user data.
+                    print((logs.stdout + logs.stderr)[-4500:], flush=True)
+            raise
         finally:
             if admin is not None:
                 admin.terminate()
