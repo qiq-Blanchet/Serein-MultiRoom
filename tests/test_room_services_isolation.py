@@ -244,7 +244,7 @@ def test_real_summary_pipeline_keeps_auto_toggle_and_settled_events_in_their_roo
     save_settings(db_a, {"pipeline": {"auto_enabled": True}})
     completed_a = asyncio.run(pipeline.advance(
         db_a, include_recent=True, runner=synthetic_runner))
-    assert completed_a["events"] == 1, completed_a
+    assert completed_a.get("events") == 1, completed_a
     a_summaries, a_processed = snapshot(db_a)
     assert a_processed == 2 and len(a_summaries) == 1
     assert "M6_PRIVATE_ALPHA" in a_summaries[0]
