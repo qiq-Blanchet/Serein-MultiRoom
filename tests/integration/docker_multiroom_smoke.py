@@ -482,22 +482,48 @@ def verify_chat_load(manager: RoomManager, runtime: DockerRuntime,
             opposite = "BETA" if label == "ALPHA" else "ALPHA"
             assert opposite not in json.dumps(rows)
 
-        print("M6 Phase3: SIGKILL A and verify Docker restart policy keeps B live", flush=True)
+        print("M6 Phase3: crash A application process, Docker restarts A; B stays live",
+              flush=True)
         room_a = manager.get(aid)
         before = runtime.inspect(manager, room_a)
         initial_restarts = before.get("RestartCount", 0)
-        subprocess.run(
-            ["docker", "container", "kill", "--signal=KILL",
-             runtime.container_name(manager, room_a)],
-            check=True, capture_output=True, text=True, timeout=20,
+        # docker kill is an explicit administrative stop and intentionally
+        # suppresses Docker restart policies. Kill only the Serein Python
+        # service *inside* the container, letting PID 1 (--init) exit normally
+        # when its child dies. Docker should then restart the failed container.
+        synthetic_crash = (
+            "import os,glob,signal;"
+            "me=os.getpid();"
+            "targets=[int(path.split('/')[2]) for path in glob.glob('/proc/[0-9]*/cmdline')"
+            " if int(path.split('/')[2]) not in (1,me)"
+            " and b'serein.launch' in open(path,'rb').read()];"
+            "assert len(targets)==1,targets;"
+            "os.kill(targets[0],signal.SIGKILL)"
         )
+        killed = subprocess.run(
+            ["docker", "exec", runtime.container_name(manager, room_a),
+             "python", "-c", synthetic_crash],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        assert killed.returncode in (0, 137), (
+            killed.returncode, killed.stderr[-300:])
         # A sudden single-container crash is NOT a Docker-host or OS reboot.
         assert request(GATEWAY + "/v1/models", token=b_key)[0] == 200
-        assert runtime.wait_healthy(manager, room_a, timeout=120), (
-            "A did not return healthy after synthetic SIGKILL")
-        after = runtime.inspect(manager, room_a)
-        assert after.get("RestartCount", 0) > initial_restarts, (
-            "Expected Docker's unless-stopped crash recovery", after.get("RestartCount"))
+        deadline = time.monotonic() + 120
+        after = None
+        while time.monotonic() < deadline:
+            after = runtime.inspect(manager, room_a)
+            state = (after or {}).get("State") or {}
+            health = (state.get("Health") or {}).get("Status")
+            if (after and after.get("RestartCount", 0) > initial_restarts
+                    and state.get("Running") and health == "healthy"):
+                break
+            time.sleep(2)
+        else:
+            raise AssertionError(
+                "A did not auto-restart after an unexpected Python process crash: "
+                + str({"status": (after or {}).get("State", {}).get("Status"),
+                       "restarts": (after or {}).get("RestartCount")}))
         assert request(GATEWAY + "/v1/models", token=b_key)[0] == 200
         verify_models(a_key, b_key)
         status, raw = chat_completion(a_key, "ALPHA", 99)
