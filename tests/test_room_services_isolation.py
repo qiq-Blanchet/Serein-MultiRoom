@@ -242,6 +242,17 @@ def test_real_summary_pipeline_keeps_auto_toggle_and_settled_events_in_their_roo
 
     # Enable the first room, then actually settle its own original pair.
     save_settings(db_a, {"pipeline": {"auto_enabled": True}})
+    with Store(db_a, read_only=True) as store:
+        original_rows = store.conn.execute(
+            "SELECT * FROM raw_events ORDER BY id"
+        ).fetchall()
+        original_units = pipeline.dialogue_units(
+            [pipeline.task_message(row) for row in original_rows]
+        )
+    assert len(original_rows) == 2, [dict(row) for row in original_rows]
+    assert len(original_units) == 1 and pipeline.dialogue_unit_is_complete(
+        original_units[0]
+    ), original_units
     completed_a = asyncio.run(pipeline.advance(
         db_a, include_recent=True, runner=synthetic_runner))
     assert completed_a.get("events") == 1, completed_a
