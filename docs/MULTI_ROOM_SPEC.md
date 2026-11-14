@@ -2,7 +2,7 @@
 
 > **文档定位：** 本文件是 Serein-MultiRoom 项目的长期设计基线（source of truth），供以后的人类开发者及 AI 编程助手在上下文压缩、跨会话、多人协作后继续使用。实现前先读本文；如果某项实现与本文冲突，先提出变更，不要私自改变已经决定的产品方向。
 >
-> **状态：** 总体需求已确认；M1 房间管理内核、M2 Chat/MCP 静态网关、M3 原版 Dashboard 可选房间切换及第三阶段隔离 Docker 启动编排均已提交，离线模拟/构建回归已通过。Dashboard 沿用原版**用户自定义用户名＋密码**，内部管理员 Key 不用于网页登录；**真实 VPS 多房间 Docker 联机、全功能页面端到端验收、MCP OAuth、备份和统一升级仍未完成**。下文中的接口、目录、命令和网页界面只要标为「建议／拟议」，就不是当前代码已经具备的功能。
+> **状态：** 总体需求已确认；M1 房间管理内核、M2 Chat/MCP 静态网关、M3 原版 Dashboard 可选房间切换及第三阶段隔离 Docker 启动编排均已提交，离线模拟/构建回归已通过。Dashboard 沿用原版**用户自定义用户名＋密码**，内部管理员 Key 不用于网页登录；**M6 已用 GitHub-hosted Runner 真正启动双房 Docker、Chat/MCP、Dashboard，并完成合成数据整房备份恢复验证；真实 VPS 联机、全功能页面端到端验收、MCP OAuth、跨房统一备份和受控升级仍未完成**。下文中的接口、目录、命令和网页界面只要标为「建议／拟议」，就不是当前代码已经具备的功能。
 >
 > **建立日期：** 2026-11-08  
 > **目标仓库：** `qiq-Blanchet/Serein-MultiRoom`  
@@ -301,15 +301,16 @@ runtime/
 - [x] 创建开发分支：`feature/multi-room`。
 - [x] 形成初版长期设计文档。
 - [x] M0 开发分支核心自动化回归通过（离线 CI）；尚未在真实 VPS 测试。
-- [ ] M1 房间管理内核：已完成房间注册、隔离目录、空库初始化、配置白名单克隆、CLI、Docker 容器生命周期与模拟测试；**仍待真实 Docker 双房启动验收**，详见 [ROOMS_M1.md](ROOMS_M1.md)。
+- [ ] M1 房间管理内核：已完成房间注册、隔离目录、空库初始化、配置白名单克隆、CLI、Docker 容器生命周期与模拟测试；**GitHub 托管 Runner 的真实 Docker 双房启动已通过，仍待用户 VPS 独立测试目录的实机验收**，详见 [ROOMS_M1.md](ROOMS_M1.md)、[ROOMS_M6_REAL_DOCKER_PHASE1.md](ROOMS_M6_REAL_DOCKER_PHASE1.md)。
 - [ ] M2 鉴权与路由：Chat/MCP 静态 Bearer 分流、安全代理与隔离测试已实现；仍待 VPS 双房实测、密钥轮换及 OAuth（M5）。
 - [ ] M3 网页管理与配置克隆：首期独立管理员管理台、第二阶段原版 Dashboard 左侧小房间切换按钮和网页创建/启动/切房、第三阶段隔离 Docker 连接与可自定义网页登录账号均已实现离线版本；**MCP 权限编辑现已进入原版「设置 → 功能」折叠页**，详见 M4；仍待真实 VPS 多容器联机及全部原版页面端到端验收。见 [ROOMS_M3_PHASE1.md](ROOMS_M3_PHASE1.md)、[ROOMS_M3_PHASE2.md](ROOMS_M3_PHASE2.md)、[ROOMS_M3_PHASE3.md](ROOMS_M3_PHASE3.md)。
 - [ ] M4 完整功能与任务隔离：已用两套原版 Serein Application 的合成测试检查独立后台生命周期、独立 SQLite 状态、MCP `tools/list` 和 `tools/call` 权限隔离；已修复新房 MCP 默认空工具清单，并提供逐房间 MCP 权限网页设置（仅重启目标房间）；**真实 Docker 双房自动摘要/梦境/心绪/备忘长时间运行与写入、配置更新端到端验收仍未完成**。见 [ROOMS_M4_PHASE1.md](ROOMS_M4_PHASE1.md)。
-- [ ] M5 OAuth、备份、统一升级：**第一阶段**已将原版导入、SQLite 数据库备份与 Scene/Event 分类 ZIP 绑定当前房间；**第二阶段**新增原版 Dashboard 内「当前房间完整归档」，支持单房停止/恢复运行、排除 Gateway Key/内部 API Token 的便携归档、来源房间自定义 ID 及逐文件 SHA-256 清单校验、预览、流式下载，并避免暂停中隐式回退其他房间。**受控同房恢复的离线版本已加入，跨房统一打包、实机恢复/回滚演练、OAuth、加密、统一升级与真实双房联机仍待后续阶段**。见 [ROOMS_M5_BACKUP_IMPORT_PHASE1.md](ROOMS_M5_BACKUP_IMPORT_PHASE1.md)、[ROOMS_M5_FULL_ARCHIVES_PHASE2.md](ROOMS_M5_FULL_ARCHIVES_PHASE2.md)。
-- [ ] M6 发布准备。
+- [ ] M5 OAuth、备份、统一升级：**第一阶段**已将原版导入、SQLite 数据库备份与 Scene/Event 分类 ZIP 绑定当前房间；**第二阶段**新增原版 Dashboard 内「当前房间完整归档」，支持单房停止/恢复运行、排除 Gateway Key/内部 API Token 的便携归档、来源房间自定义 ID 及逐文件 SHA-256 清单校验、预览、流式下载，并避免暂停中隐式回退其他房间。**受控同房恢复已在 GitHub Runner 上以真实双房 Docker 和假数据执行通过；跨房统一打包、用户真实 VPS 的断电/恢复演练、OAuth、加密、统一升级和长期稳定性仍待后续阶段**。见 [ROOMS_M5_BACKUP_IMPORT_PHASE1.md](ROOMS_M5_BACKUP_IMPORT_PHASE1.md)、[ROOMS_M5_FULL_ARCHIVES_PHASE2.md](ROOMS_M5_FULL_ARCHIVES_PHASE2.md)。
+- [ ] M6 发布准备：第一期 **GitHub 托管 Runner 真实 Docker 双房链路/Chat/MCP/网页登录/备份恢复自动验收已完成**，包括 Gateway 私有文件 UID/GID 权限和只读 Dashboard 的 Vite 临时目录修复；还需要独立测试 VPS 的 HTTPS、systemd、持续后台任务、上游更新、真实恢复回滚与最终发布。见 [ROOMS_M6_REAL_DOCKER_PHASE1.md](ROOMS_M6_REAL_DOCKER_PHASE1.md)。
 
 ### 实施记录（2026-11-09）
 
+- **M6 第一期真实 Docker 验收（2026-11-14）**：GitHub Actions 临时 Runner 实际构建核心/Dashboard 镜像并运行两房记忆服务、Chat/MCP 网关、私有管理员服务及原版 Dashboard。真实网络中验证房间 Key、MCP tools/list/call、各自 Scene、A 停机时 B 继续服务；同房整房归档和 rollback 恢复通过，原 Gateway Key 不变。实测修复 Gateway/Dashboard 以文件主人 UID:GID 读取 0600 私有控制文件及只读 Vite 缓存。只使用合成数据，非用户 VPS。见 [ROOMS_M6_REAL_DOCKER_PHASE1.md](ROOMS_M6_REAL_DOCKER_PHASE1.md)。
 - **M5 第三阶段同房间受控恢复（2026-11-10）**：Dashboard 在已登录且选中目标房间后可上传同房间 ID 的旧备份、验证文件清单和 SQLite schema、显式输入该房间 ID 与归档 SHA-256 双重确认恢复；只交换当前房间 `config/` 和 `data/`，保留现有 `secrets/` 下的 Gateway Key、内部 Token。恢复前自动生成同房间回滚备份；断电中断时阻止房间直接启动，并提供故障恢复命令。正常 VPS 重启不重生 Gateway Key；完整自动恢复场景仍需实机验证。见 [ROOMS_M5_RESTORE_PHASE3.md](ROOMS_M5_RESTORE_PHASE3.md)。
 - **M5 第二阶段完整房间归档（2026-11-10；同日按用户反馈调整）**：房间数据、独立配置、附件、索引按独立目录备份，默认不包含 Gateway Key 与内部 API Token；SQLite 文件由 backup API 生成一致性副本；归档附带逐文件校验和与自定义房间 ID。旧 v1 含 Key 归档仍可只读预览，但不再要求 Key 与新环境一致。Dashboard 可在原「旧库迁移」内为当前房间创建/校验/下载完整归档，操作只临时停止本房间，其他房间继续运行；暂停房间不再自动回落另一 AI。恢复仍只允许预览，待独立恢复演练及回滚能力验收后再开放覆盖写入。见 [ROOMS_M5_FULL_ARCHIVES_PHASE2.md](ROOMS_M5_FULL_ARCHIVES_PHASE2.md)。
 - **M5 房间级导入／导出第一阶段（2026-11-10）**：主 Dashboard 现有导入和备份请求使用同一服务器已验证房间；上传／导出额外校验首次载入的房间身份，防止切换另一标签页后旧页面误写别房。数据库快照保留原版 SQLite 语义，新增 Scene/Event 分类 ZIP，文件名带房间 ID；导入/备份的双房合成回归已加入 CI。**数据库备份不等于完整房间安装包；本阶段不提供无预览的数据库覆盖恢复**。详见 [ROOMS_M5_BACKUP_IMPORT_PHASE1.md](ROOMS_M5_BACKUP_IMPORT_PHASE1.md)。
@@ -318,7 +319,7 @@ runtime/
 - **M4 第一期任务/MCP 隔离已提交**：M1 新房使用原版默认 MCP 工具策略（`mcp.tools` 未设置），仅自定义工具权限时才写工具列表。原版「设置 → 功能」增加可选 MCP 权限折叠区；改动只通过独立管理层更新目标房间的部署配置并重建目标房间容器，不删除记忆数据，也不修改原版 MCP 核心。后台模型任务、requested-work 及原版 MCP `tools/list`/`tools/call` 已通过双房合成验证。详见 [ROOMS_M4_PHASE1.md](ROOMS_M4_PHASE1.md)；尚待实机验证。
 
 
-- **M3 第三阶段隔离部署已提交**：原版 `deploy/Gateway.Dockerfile` 构建一份共享网页镜像，`scripts/rooms.py dashboard-build/start/status/stop` 启动原版网页，多房间控制层由 VPS 宿主机绑定安装专属 RFC1918 Docker bridge IP。原版单房 `deploy/compose.yaml` 不变。新增 `web-auth` 交互命令，可设置中文/任意合规用户名和密码并使用原版 scrypt 格式；Key 仅用于内部管理 API。**仅通过模拟 Docker，仍待实机联机验收**。见 [ROOMS_M3_PHASE3.md](ROOMS_M3_PHASE3.md)。
+- **M3 第三阶段隔离部署已提交**：原版 `deploy/Gateway.Dockerfile` 构建一份共享网页镜像，`scripts/rooms.py dashboard-build/start/status/stop` 启动原版网页，多房间控制层由 VPS 宿主机绑定安装专属 RFC1918 Docker bridge IP。原版单房 `deploy/compose.yaml` 不变。新增 `web-auth` 交互命令，可设置中文/任意合规用户名和密码并使用原版 scrypt 格式；Key 仅用于内部管理 API。**已补充 GitHub Runner 真实 Docker 双房与原版 Dashboard 联机验收，仍待用户 VPS 环境验收**。见 [ROOMS_M3_PHASE3.md](ROOMS_M3_PHASE3.md)、[ROOMS_M6_REAL_DOCKER_PHASE1.md](ROOMS_M6_REAL_DOCKER_PHASE1.md)。
 - **M3 第二阶段原版侧边栏已提交**：在「使用说明／花园／设置」上方加入一个可选的小房间切换入口，复用同站点管理员鉴权，不要求每次切换重新登录。Dashboard 的原功能模块通过签名 room 上下文按房间桥接；浏览器 local/session storage、花园、叙事预览和路由草稿按房间隔离；`main` 原样保留，单房运行默认不开启多房间模式。**真实生产部署网络/容器集成仍未完成**。见 [ROOMS_M3_PHASE2.md](ROOMS_M3_PHASE2.md)。
 - **M3 首期独立控制台已提交**：`src/serein/room_admin.py` 及 `rooms_ui.html/js`，按单独的管理员密钥授权查看、创建、启停房间并选择配置克隆来源；`scripts/rooms.py admin-init/admin-serve` 仅在 loopback 上启动，原版 Web 代码未改动。见 [ROOMS_M3_PHASE1.md](ROOMS_M3_PHASE1.md)。**不是原版所有功能页面整合完成**。
 - **M2 静态入口已提交**：`src/serein/room_gateway.py` 负责按已验证 Key 分流 Chat/MCP；`src/serein/room_manager.py` 发布仅含 ready 房间凭据映射的私有路由清单；`src/serein/room_docker.py` 能启动唯一的 loopback-only 网关容器。网关不可访问管理 API/OAuth，详见 [ROOMS_M2.md](ROOMS_M2.md)。真实 Docker 部署仍待验证。
