@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
 import json
 import os
 from pathlib import Path
@@ -338,6 +341,181 @@ def verify_live_dashboard(manager: RoomManager, runtime: DockerRuntime,
     assert json.loads(body)["identity"]["ai_name"] == "CI Dashboard Alpha"
     verify_models(a_key, b_key)
 
+
+class SyntheticChatUpstream:
+    """Local-only, disposable OpenAI-compatible fake LLM; no paid provider calls."""
+
+    def __init__(self, private_bridge_ip: str):
+        owner = self
+        self.calls = []
+        self.lock = threading.Lock()
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                if self.path != "/v1/chat/completions":
+                    self.send_error(404)
+                    return
+                try:
+                    size = int(self.headers.get("Content-Length", "-1"))
+                    if not 0 < size <= 100_000:
+                        raise ValueError("Invalid synthetic request size")
+                    payload = json.loads(self.rfile.read(size))
+                    model = payload["model"]
+                    if model not in ("alpha-only-model", "beta-only-model"):
+                        raise ValueError("Unrecognized synthetic model")
+                    label = "ALPHA" if model.startswith("alpha") else "BETA"
+                    with owner.lock:
+                        owner.calls.append({"label": label, "messages": payload["messages"]})
+                    reply = {
+                        "id": "chatcmpl-m6-local-" + label.lower(),
+                        "object": "chat.completion",
+                        "created": 1794650000,
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "M6_SYNTHETIC_MODEL_REPLY_" + label,
+                            },
+                            "finish_reason": "stop",
+                        }],
+                        "usage": {"prompt_tokens": 8, "completion_tokens": 5,
+                                  "total_tokens": 13},
+                    }
+                    encoded = json.dumps(reply).encode()
+                    self.send_response(200)
+                except (KeyError, ValueError, TypeError, json.JSONDecodeError):
+                    encoded = b'{"error":"invalid CI model request"}'
+                    self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, format, *args):
+                # User prompts must never be copied into runner output.
+                pass
+
+        self.server = ThreadingHTTPServer((private_bridge_ip, 0), Handler)
+        self.thread = threading.Thread(
+            target=self.server.serve_forever, name="m6-local-fake-llm", daemon=True,
+        )
+        self.base_url = f"http://{private_bridge_ip}:{self.server.server_port}/v1"
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *args):
+        self.server.shutdown()
+        self.thread.join(timeout=5)
+        self.server.server_close()
+
+
+def chat_completion(key: str, label: str, number: int):
+    body = {
+        "model": label.lower() + "/" + label.lower() + "-only-model",
+        "messages": [{"role": "user",
+                      "content": f"M6_SYNTHETIC_PRIVATE_USER_{label}_{number}"}],
+        "stream": False,
+        "serein": {"memory": False, "window_id": f"ci-{label.lower()}-{number}"},
+    }
+    encoded = json.dumps(body).encode()
+    req = urllib.request.Request(
+        GATEWAY + "/v1/chat/completions", data=encoded, method="POST",
+        headers={"Authorization": "Bearer " + key,
+                 "Content-Type": "application/json", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=45) as response:
+            return response.status, response.read().decode()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode(errors="replace")
+
+
+def verify_chat_load(manager: RoomManager, runtime: DockerRuntime,
+                     aid: str, bid: str, a_key: str, b_key: str):
+    """Real two-room HTTP chat -> local mock model -> durable original archive."""
+    bridge_ip = runtime.network_gateway_ip(manager)
+    with SyntheticChatUpstream(bridge_ip) as fake:
+        for room_id, label in ((aid, "ALPHA"), (bid, "BETA")):
+            db = manager.room_dir(room_id) / "data" / "serein.db"
+            save_settings(db, {"upstreams": [{
+                "name": label.lower(),
+                "base_url": fake.base_url,
+                "models": [label.lower() + "-only-model"],
+            }]})
+        print("M6 Phase3: concurrent real chat requests through mock LLM", flush=True)
+        jobs = [(a_key, "ALPHA", index) for index in range(5)]
+        jobs += [(b_key, "BETA", index) for index in range(5)]
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            outcomes = list(executor.map(lambda args: (*args, chat_completion(*args)),
+                                         jobs))
+        for key, label, number, (status, raw) in outcomes:
+            assert status == 200, (label, number, status, raw[:300])
+            response = json.loads(raw)
+            answer = response["choices"][0]["message"]["content"]
+            assert answer == "M6_SYNTHETIC_MODEL_REPLY_" + label, (label, answer)
+            assert response["model"] == label.lower() + "-only-model", response
+        with fake.lock:
+            received = list(fake.calls)
+        assert sum(item["label"] == "ALPHA" for item in received) == 5
+        assert sum(item["label"] == "BETA" for item in received) == 5
+        for entry in received:
+            opposite = "BETA" if entry["label"] == "ALPHA" else "ALPHA"
+            assert "M6_SYNTHETIC_PRIVATE_USER_" + opposite not in json.dumps(
+                entry["messages"]), "Private cross-room user input forwarded"
+
+        print("M6 Phase3: read archived user and assistant turns from each DB", flush=True)
+        for room_id, label in ((aid, "ALPHA"), (bid, "BETA")):
+            db = manager.room_dir(room_id) / "data" / "serein.db"
+            with Store(db, read_only=True) as store:
+                rows = [dict(row) for row in store.conn.execute(
+                    "SELECT role,text FROM raw_events WHERE source='serein_chat'")]
+            users = [r["text"] for r in rows if r["role"] == "user"]
+            answers = [r["text"] for r in rows if r["role"] == "assistant"]
+            assert len(users) == len(answers) == 5, (label, users, answers)
+            assert set(users) == {
+                f"M6_SYNTHETIC_PRIVATE_USER_{label}_{i}" for i in range(5)
+            }
+            assert set(answers) == {"M6_SYNTHETIC_MODEL_REPLY_" + label}
+            opposite = "BETA" if label == "ALPHA" else "ALPHA"
+            assert opposite not in json.dumps(rows)
+
+        print("M6 Phase3: SIGKILL A and verify Docker restart policy keeps B live", flush=True)
+        room_a = manager.get(aid)
+        before = runtime.inspect(manager, room_a)
+        initial_restarts = before.get("RestartCount", 0)
+        subprocess.run(
+            ["docker", "container", "kill", "--signal=KILL",
+             runtime.container_name(manager, room_a)],
+            check=True, capture_output=True, text=True, timeout=20,
+        )
+        # A sudden single-container crash is NOT a Docker-host or OS reboot.
+        assert request(GATEWAY + "/v1/models", token=b_key)[0] == 200
+        assert runtime.wait_healthy(manager, room_a, timeout=120), (
+            "A did not return healthy after synthetic SIGKILL")
+        after = runtime.inspect(manager, room_a)
+        assert after.get("RestartCount", 0) > initial_restarts, (
+            "Expected Docker's unless-stopped crash recovery", after.get("RestartCount"))
+        assert request(GATEWAY + "/v1/models", token=b_key)[0] == 200
+        verify_models(a_key, b_key)
+        status, raw = chat_completion(a_key, "ALPHA", 99)
+        assert status == 200, (status, raw[:250])
+        assert "M6_SYNTHETIC_MODEL_REPLY_ALPHA" in raw
+        for room_id, label, expected_count in ((aid, "ALPHA", 6),
+                                               (bid, "BETA", 5)):
+            db = manager.room_dir(room_id) / "data" / "serein.db"
+            with Store(db, read_only=True) as store:
+                rows = [dict(row) for row in store.conn.execute(
+                    "SELECT role,text FROM raw_events WHERE source='serein_chat'")]
+            assert len(rows) == expected_count * 2, (label, len(rows))
+            opposite = "BETA" if label == "ALPHA" else "ALPHA"
+            assert opposite not in json.dumps(rows)
+        print("M6 Phase3 PASS: fake upstream chats, durable archives and crash recovery",
+              flush=True)
+
+
 def run():
     assert shutil.which("docker"), "Docker executable is required"
     subprocess.run(["docker", "info"], check=True, capture_output=True)
@@ -458,6 +636,8 @@ def run():
                 assert manager.get(aid)["state"] == manager.get(bid)["state"] == "ready"
                 verify_live_dashboard(manager, runtime, aid, bid,
                                       a["gateway_key"], b["gateway_key"])
+                verify_chat_load(manager, runtime, aid, bid,
+                                 a["gateway_key"], b["gateway_key"])
             print("M6 Docker PASS: real rooms, MCP, Gateway and Dashboard isolated", flush=True)
         except BaseException:
             print("M6 Docker diagnostic: status and tail of synthetic test containers", flush=True)
