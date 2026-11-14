@@ -255,11 +255,32 @@ def test_real_summary_pipeline_keeps_auto_toggle_and_settled_events_in_their_roo
     ), original_units
     pipeline.initialize(db_a)
     first_batch = pipeline.new_batch(db_a, include_recent=True)
+    with Store(db_a, read_only=True) as store:
+        debug_processing = store.conn.execute(
+            "SELECT raw_id, operation_id, outcome FROM raw_processing"
+        ).fetchall()
+        debug_batches = store.conn.execute(
+            "SELECT scope,status FROM pipeline_batches"
+        ).fetchall()
+        debug_unprocessed = store.conn.execute(
+            "SELECT r.id,r.source,r.session_id,r.metadata_json FROM raw_events r "
+            "WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)"
+        ).fetchall()
+        debug_boundaries = store.conn.execute(
+            "SELECT * FROM pipeline_import_boundaries"
+        ).fetchall()
     assert first_batch is not None, {
         "raw_rows": [(row["source"], row["session_id"], row["role"],
                       row["created_at"]) for row in original_rows],
         "unit_count": len(original_units),
-        "pipeline_policy": pipeline.read_settings(db_a)["pipeline"],
+        "unprocessed": [tuple(row) for row in debug_unprocessed],
+        "processed": [tuple(row) for row in debug_processing],
+        "batches": [tuple(row) for row in debug_batches],
+        "boundaries": [tuple(row) for row in debug_boundaries],
+        "policy_max_input": pipeline.read_settings(db_a)["pipeline"]["max_input_chars"],
+        "frames": pipeline.routing_blocks(
+            [pipeline.task_message(row) for row in original_rows], 40000
+        ),
     }
     completed_a = asyncio.run(pipeline.advance(
         db_a, include_recent=True, runner=synthetic_runner))
