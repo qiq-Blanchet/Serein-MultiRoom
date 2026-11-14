@@ -250,7 +250,8 @@ def verify_live_dashboard(manager: RoomManager, runtime: DockerRuntime,
     assert b_after["assignments"].get("event_writer") != a_model
     status, body, _ = dashboard_http("/__serein/settings", method="PATCH",
                                       cookie=cookie_a, payload=patch)
-    assert status == 409, (status, body[:250])
+    # Original settings API deliberately maps stale-version conflicts to HTTP 400.
+    assert status == 400 and "设置已在其他页面更新" in body, (status, body[:250])
     status, body, _ = dashboard_http(
         "/__serein/settings", cookie=cookie_a,
         extra_headers={"X-Serein-Verified-Room": bid,
