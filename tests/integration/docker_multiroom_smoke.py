@@ -542,6 +542,65 @@ def verify_chat_load(manager: RoomManager, runtime: DockerRuntime,
               flush=True)
 
 
+
+def verify_dynamic_clone(manager: RoomManager, runtime: DockerRuntime,
+                         aid: str, bid: str, a_key: str, b_key: str,
+                         containers: list[str]):
+    """Create a third room while A/B are live; copy reusable config, never memories."""
+    from serein.deployment import read_settings
+
+    print("M6 Phase3: hot-add third room from first room's configuration", flush=True)
+    before_a = read_settings(manager.room_dir(aid) / "data" / "serein.db")
+    third = manager.create("Synthetic Third", source="first", room_slug="third-main")
+    room = third["room"]
+    cid = room["room_id"]
+    c_key = third["gateway_key"]
+    containers.append(runtime.container_name(manager, room))
+    assert room["source_room_id"] == aid
+    assert len({a_key, b_key, c_key}) == 3
+    assert manager.get(cid)["state"] == "stopped"
+    assert request(GATEWAY + "/v1/models", token=c_key)[0] == 401
+    db = manager.room_dir(cid) / "data" / "serein.db"
+    with Store(db, read_only=True) as store:
+        assert store.conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        assert store.conn.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0] == 0
+        assert store.conn.execute("SELECT COUNT(*) FROM injection_debug").fetchone()[0] == 0
+    # Treat the clone as a new AI, with a fresh name, credential and empty data.
+    assert b"M6_SYNTHETIC_PRIVATE_USER_" not in db.read_bytes()
+    assert b"M6_PRIVATE_CONTENT_ONLY_FOR_" not in db.read_bytes()
+    cloned = read_settings(db)
+    assert cloned["identity"]["ai_name"] == "AI"
+    assert cloned["identity"]["user_name"] == "User"
+    assert cloned["upstreams"][0]["name"] == before_a["upstreams"][0]["name"]
+    assert cloned["upstreams"][0]["base_url"] == before_a["upstreams"][0]["base_url"]
+    assert cloned["upstreams"][0].get("api_key", "") == ""
+    assert cloned["features"]["memos"] == before_a["features"]["memos"]
+    assert cloned["pipeline"]["auto_enabled"] == before_a["pipeline"]["auto_enabled"]
+    assert cloned["assignments"]["event_writer"] == before_a["assignments"]["event_writer"]
+    assert manager.mcp_permissions(cid)["tools"] == manager.mcp_permissions(aid)["tools"]
+
+    manager.start(cid, runtime, wait_seconds=150)
+    assert manager.get(cid)["state"] == "ready"
+    status, raw = request(GATEWAY + "/v1/models", token=c_key)
+    assert status == 200, (status, raw[:300])
+    assert [row["id"] for row in json.loads(raw)["data"]] == [
+        "alpha/alpha-only-model",
+    ]
+    verify_models(a_key, b_key)
+    # Stopping and re-starting C must not disturb existing rooms or replace its key.
+    manager.stop(cid, runtime)
+    assert request(GATEWAY + "/v1/models", token=c_key)[0] == 401
+    verify_models(a_key, b_key)
+    manager.start(cid, runtime, wait_seconds=150)
+    assert request(GATEWAY + "/v1/models", token=c_key)[0] == 200
+    assert (manager.room_dir(cid) / "secrets" / "gateway-key"
+            ).read_text().strip() == c_key
+    with Store(db, read_only=True) as store:
+        assert store.conn.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0] == 0
+    print("M6 Phase3 PASS: live third-room creation clones settings, not private data",
+          flush=True)
+
+
 def run():
     assert shutil.which("docker"), "Docker executable is required"
     subprocess.run(["docker", "info"], check=True, capture_output=True)
@@ -664,6 +723,8 @@ def run():
                                       a["gateway_key"], b["gateway_key"])
                 verify_chat_load(manager, runtime, aid, bid,
                                  a["gateway_key"], b["gateway_key"])
+                verify_dynamic_clone(manager, runtime, aid, bid,
+                                     a["gateway_key"], b["gateway_key"], containers)
             print("M6 Docker PASS: real rooms, MCP, Gateway and Dashboard isolated", flush=True)
         except BaseException:
             print("M6 Docker diagnostic: status and tail of synthetic test containers", flush=True)
