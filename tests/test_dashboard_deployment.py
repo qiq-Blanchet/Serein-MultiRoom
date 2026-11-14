@@ -102,6 +102,11 @@ def test_original_dashboard_container_uses_internal_routes_not_room_db_mounts(tm
     ][0]
     envs = [dashboard_cmd[i + 1] for i, item in enumerate(dashboard_cmd) if item == "--env"]
     mounts = [dashboard_cmd[i + 1] for i, item in enumerate(dashboard_cmd) if item == "--mount"]
+    assert dashboard_cmd[dashboard_cmd.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}"
+    gateway_cmd = next(cmd for cmd in fake.calls if len(cmd) > 2
+                       and cmd[1] == "run"
+                       and runtime.gateway_name(manager) in cmd)
+    assert gateway_cmd[gateway_cmd.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}"
     assert dashboard_cmd[dashboard_cmd.index("--publish") + 1] == "127.0.0.1:18217:8080"
     assert "--add-host" not in dashboard_cmd
     assert "SEREIN_MULTIROOM_ADMIN_URL=http://172.28.0.1:18220" in envs
