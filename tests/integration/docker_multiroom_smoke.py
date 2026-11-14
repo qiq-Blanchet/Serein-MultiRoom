@@ -28,6 +28,8 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from serein.core.store import Store
+from serein.room_archive import create_room_backup, preview_room_backup, room_backups
+from serein.room_restore import plan_room_restore, restore_room_backup
 from serein.deployment import save_settings
 from serein.room_admin import initialize_admin_key, save_dashboard_credentials
 from serein.room_docker import DockerRuntime
@@ -182,6 +184,41 @@ def run():
             assert request(GATEWAY + "/v1/models", token=a["gateway_key"])[0] == 401
             assert request(GATEWAY + "/v1/models", token=b["gateway_key"])[0] == 200
             manager.start(aid, runtime, wait_seconds=150)
+            assert (manager.room_dir(aid) / "secrets" / "gateway-key"
+                    ).read_text().strip() == a["gateway_key"]
+            verify_models(a["gateway_key"], b["gateway_key"])
+
+            print("M6 Docker: verifying real full-room backup and rollback restore", flush=True)
+            archive = create_room_backup(manager, aid, runtime)
+            assert archive["room_slug"] == "xiaogi-main"
+            assert archive["restarted"] is True
+            assert preview_room_backup(manager, aid, archive["name"])["verified"] is True
+            assert room_backups(manager, bid) == []
+            manager.stop(aid, runtime)
+            with Store(manager.room_dir(aid) / "data" / "serein.db") as store:
+                store.create("scene-POST_BACKUP", "scene", "CI transient memory",
+                             "M6_TEMPORARY_MEMORY_TO_BE_ROLLED_BACK")
+            manager.start(aid, runtime, wait_seconds=150)
+            plan = plan_room_restore(manager, aid, archive["name"])
+            assert plan["schema_compatible"] and plan["restore_available"], plan
+            restored = restore_room_backup(
+                manager, aid, archive["name"], runtime,
+                confirm_slug="xiaogi-main", expected_sha256=plan["archive_sha256"],
+            )
+            assert restored["restored"] and restored["restarted"]
+            assert restored["gateway_key_unchanged"] is True
+            assert restored["rollback_backup"] != archive["name"]
+            with Store(manager.room_dir(aid) / "data" / "serein.db") as store:
+                assert store.conn.execute(
+                    "SELECT 1 FROM documents WHERE id=?", ("scene-ALPHA",)
+                ).fetchone()
+                assert not store.conn.execute(
+                    "SELECT 1 FROM documents WHERE id=?", ("scene-POST_BACKUP",)
+                ).fetchone()
+            with Store(manager.room_dir(bid) / "data" / "serein.db") as store:
+                assert store.conn.execute(
+                    "SELECT 1 FROM documents WHERE id=?", ("scene-BETA",)
+                ).fetchone()
             assert (manager.room_dir(aid) / "secrets" / "gateway-key"
                     ).read_text().strip() == a["gateway_key"]
             verify_models(a["gateway_key"], b["gateway_key"])
