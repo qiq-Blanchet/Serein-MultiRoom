@@ -1,4 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
+import {roomTargetHeaders} from '../storage/roomScopedStorage.js';
 import {ConversationImport} from './ConversationImport.jsx';
 import {instanceSettings} from '../storage/instanceStore.js';
 import {PendingMaterials} from './PendingMaterials.jsx';
@@ -35,7 +36,7 @@ export function PipelineSettings({onOpenSummary}) {
     :'自动整理已开启；后台在每天 03:00 后检查新原话。要立即运行可点击“继续整理”。';
   const stages={paused:'本批已暂停',idle:'尚未开始',queued:'等待后台处理',starting:'正在准备',track_router:'归线',event_curator:'切分整理',event_writer:'Event 写作',awaiting_agent:'等待 Agent',processed:'本批处理完成',current:'本轮检查完成',retained:'已移入待处理材料',needs_repair:'归线材料待修复',rebuilt:'计划已重建',blocked:'部分聊天等待处理',retry_wait:'等待有限重试'};
   async function call(action,body) {
-    const response=await fetch('/__serein/pipeline/'+action,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const response=await fetch('/__serein/pipeline/'+action,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json',...roomTargetHeaders()},body:JSON.stringify(body)});
     const result=await response.json();
     if(!response.ok)throw new Error(result.detail || '整理暂未完成，原话会保留，请稍后重试。');
     return result;

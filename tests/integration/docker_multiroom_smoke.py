@@ -231,7 +231,8 @@ def verify_live_dashboard(manager: RoomManager, runtime: DockerRuntime,
              "assignments": {"event_writer": a_model},
              "pipeline": {"auto_enabled": False, "timeout_seconds": 601}}
     status, updated_body, _ = dashboard_http("/__serein/settings", method="PATCH",
-                                              cookie=cookie_a, payload=patch)
+                                              cookie=cookie_a, payload=patch,
+                                              extra_headers={"X-Serein-Target-Room": aid})
     assert status == 200, (status, updated_body[:450])
     a_updated = json.loads(updated_body)
     assert a_updated["identity"]["ai_name"] == "CI Dashboard Alpha"
@@ -249,7 +250,8 @@ def verify_live_dashboard(manager: RoomManager, runtime: DockerRuntime,
     assert b_after["settings_version"] == b_before["settings_version"]
     assert b_after["assignments"].get("event_writer") != a_model
     status, body, _ = dashboard_http("/__serein/settings", method="PATCH",
-                                      cookie=cookie_a, payload=patch)
+                                      cookie=cookie_a, payload=patch,
+                                      extra_headers={"X-Serein-Target-Room": aid})
     # Original settings API deliberately maps stale-version conflicts to HTTP 400.
     assert status == 400 and "设置已在其他页面更新" in body, (status, body[:250])
     status, body, _ = dashboard_http(
@@ -260,6 +262,30 @@ def verify_live_dashboard(manager: RoomManager, runtime: DockerRuntime,
     for cookie in (cookie_a, cookie_b):
         status, body, _ = dashboard_http("/__serein/pipeline/status", cookie=cookie)
         assert status == 200 and isinstance(json.loads(body), dict), (status, body[:300])
+
+    # Simulate an old A tab after a different tab switched the signed cookie to B.
+    # The stale header is not authority; it can only veto a dangerous write.
+    status, body, _ = dashboard_http(
+        "/__serein/settings", method="PATCH", cookie=cookie_b,
+        payload={"expected_version": b_before["settings_version"],
+                 "identity": {"ai_name": "MUST_NOT_TOUCH_B"}},
+        extra_headers={"X-Serein-Target-Room": aid})
+    assert status == 409, (status, body[:250])
+    status, body, _ = dashboard_http(
+        "/__serein/pipeline/next", method="POST", cookie=cookie_b,
+        payload={}, extra_headers={"X-Serein-Target-Room": aid})
+    assert status == 409, (status, body[:250])
+    status, body, _ = dashboard_http("/__serein/settings", cookie=cookie_b)
+    assert status == 200 and json.loads(body)["identity"] == b_before["identity"]
+    # A valid, selected A tab may read its backup list, but not B's.
+    status, body, _ = dashboard_http(
+        "/__serein/rooms/" + aid + "/backups", cookie=cookie_a,
+        extra_headers={"X-Serein-Target-Room": aid})
+    assert status == 200 and isinstance(json.loads(body), dict), (status, body[:250])
+    status, body, _ = dashboard_http(
+        "/__serein/rooms/" + bid + "/backups", cookie=cookie_a,
+        extra_headers={"X-Serein-Target-Room": aid})
+    assert status == 409, (status, body[:250])
 
     print("M6 Dashboard: checking per-room MCP administrator access", flush=True)
     status, body, _ = dashboard_http(

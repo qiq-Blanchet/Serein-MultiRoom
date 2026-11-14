@@ -1,5 +1,6 @@
 import { readLocalPreference, storeLocalPreference } from "./awakeStore.js";
 import { settingsResponseError } from "./settingsError.js";
+import { roomTargetHeaders } from "./roomScopedStorage.js";
 
 export function identityName(role) {
   return role === "user"
@@ -10,7 +11,7 @@ export function identityName(role) {
 export async function instanceSettings(changes) {
   const response = await fetch("/__serein/settings", {
     method: changes ? "PATCH" : "GET",
-    headers: changes ? { "Content-Type": "application/json" } : {},
+    headers: changes ? { "Content-Type": "application/json", ...roomTargetHeaders() } : {},
     ...(changes ? { body: JSON.stringify(changes) } : {}),
   });
   if (!response.ok) {

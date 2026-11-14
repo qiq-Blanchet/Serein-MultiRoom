@@ -1,6 +1,7 @@
 import {ModelDiscovery} from "./ModelDiscovery.jsx";
 import {useState} from "react";
 import {createUuid} from "../utils/createUuid.js";
+import {roomTargetHeaders} from "../storage/roomScopedStorage.js";
 
 export function UpstreamSettings({upstreams,modelIds=[],assignments={},onChange,onImported,busy,setBusy,setStatus}) {
   const [template,setTemplate]=useState("");
@@ -9,7 +10,7 @@ export function UpstreamSettings({upstreams,modelIds=[],assignments={},onChange,
   async function importTemplate() {
     setBusy(true);setStatus("");
     try {
-      const response=await fetch("/__serein/settings/upstreams-template",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({template})});
+      const response=await fetch("/__serein/settings/upstreams-template",{method:"POST",headers:{"Content-Type":"application/json",...roomTargetHeaders()},body:JSON.stringify({template})});
       if(!response.ok)throw new Error("上游未导入，请检查模板、重复模型名，以及仍被功能使用的模型。");
       onImported(await response.json());setTemplate("");setStatus("上游模板已保存，聊天模型列表已更新。");
     } catch(error){setStatus(error.message);}

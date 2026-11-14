@@ -1,3 +1,4 @@
+import { roomTargetHeaders } from "./storage/roomScopedStorage.js";
 const skipLabels = {
   empty_body: '正文为空',
   requires_passage_index: '超过整篇向量字符上限',
@@ -61,7 +62,7 @@ export async function prepareMemoryIndex({fetchImpl = fetch, loadSettings}) {
   let message;
   try {
     const response = await fetchImpl('/__serein/settings/prepare-memory', {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}',
+      method: 'POST', headers: {'Content-Type': 'application/json', ...roomTargetHeaders()}, body: '{}',
     });
     if (!response.ok) throw new Error('prepare_failed');
     message = memoryPreparationSummary(await response.json());
@@ -92,7 +93,7 @@ export function indexSafetySummary(state = {}) {
 
 export async function resumeIndex(state, {fetchImpl = fetch} = {}) {
   const response = await fetchImpl('/__serein/settings/resume-index', {
-    method:'POST', headers:{'Content-Type':'application/json'},
+    method:'POST', headers:{'Content-Type':'application/json',...roomTargetHeaders()},
     body:JSON.stringify({confirm:'RESUME_INDEX_EMBEDDING', recovery_token:state.recovery_token}),
   });
   if (!response.ok) throw new Error('恢复未生效，请刷新索引状态后重试。');

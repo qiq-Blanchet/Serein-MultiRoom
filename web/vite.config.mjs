@@ -804,6 +804,8 @@ function sereinMemoryBridge() {
         if (!(candidates || indexStatus ? ["GET"] : prepare || resumeIndex || template || discovery ? ["POST"] : ["GET", "PATCH"]).includes(request.method)) {
           response.statusCode = 405; response.end(JSON.stringify({ error: "method_not_allowed" })); return;
         }
+        // A stale Dashboard tab must not write settings to another selected AI.
+        if (request.method !== 'GET' && !requireRoomMatch(request, response)) return;
         // Mutations are same-origin JSON requests, never cross-site form posts.
         if (request.method !== "GET" && (!String(request.headers["content-type"]).startsWith("application/json")
             || (request.headers.origin && new URL(request.headers.origin).host !== request.headers.host))) {
@@ -826,6 +828,7 @@ function sereinMemoryBridge() {
           if(!(request.method==="GET" && (action==="/status" || /^\/(?:attempts|pending)\/\d+$/.test(action))) && !(request.method==="POST" && ["/next","/submit","/rebuild","/retry-image","/retry-batch","/restore-auto-boundary","/recovery-preview","/skip-batch","/rebatch","/resume-pending"].includes(action))) {
           response.statusCode=405;response.end(JSON.stringify({error:"method_not_allowed"}));return;
         }
+        if(request.method==="POST" && !requireRoomMatch(request,response))return;
         if(request.method==="POST" && (!String(request.headers["content-type"]).startsWith("application/json") ||
           (request.headers.origin && new URL(request.headers.origin).host!==request.headers.host))) {
           response.statusCode=403;response.end(JSON.stringify({error:"origin_not_allowed"}));return;
