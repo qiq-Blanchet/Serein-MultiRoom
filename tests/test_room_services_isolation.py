@@ -240,55 +240,45 @@ def test_real_summary_pipeline_keeps_auto_toggle_and_settled_events_in_their_roo
     assert "M6_PRIVATE_ALPHA" not in b_summaries[0]
     assert a_summaries == [] and a_processed == 0
 
-    # Enable the first room, then actually settle its own original pair.
+    # Re-enabling auto-summary creates a durable no-backfill boundary: the
+    # two old original messages remain stored, but are not sent to the model.
     save_settings(db_a, {"pipeline": {"auto_enabled": True}})
-    with Store(db_a, read_only=True) as store:
-        original_rows = store.conn.execute(
-            "SELECT * FROM raw_events ORDER BY id"
-        ).fetchall()
-        original_units = pipeline.dialogue_units(
-            [pipeline.task_message(row) for row in original_rows]
-        )
-    assert len(original_rows) == 2, [dict(row) for row in original_rows]
-    assert len(original_units) == 1 and pipeline.dialogue_unit_is_complete(
-        original_units[0]
-    ), original_units
     pipeline.initialize(db_a)
-    first_batch = pipeline.new_batch(db_a, include_recent=True)
     with Store(db_a, read_only=True) as store:
-        debug_processing = store.conn.execute(
-            "SELECT raw_id, operation_id, outcome FROM raw_processing"
-        ).fetchall()
-        debug_batches = store.conn.execute(
-            "SELECT scope,status FROM pipeline_batches"
-        ).fetchall()
-        debug_unprocessed = store.conn.execute(
-            "SELECT r.id,r.source,r.session_id,r.metadata_json FROM raw_events r "
-            "WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)"
-        ).fetchall()
-        debug_boundaries = store.conn.execute(
-            "SELECT * FROM pipeline_import_boundaries"
-        ).fetchall()
-    assert first_batch is not None, {
-        "raw_rows": [(row["source"], row["session_id"], row["role"],
-                      row["created_at"]) for row in original_rows],
-        "unit_count": len(original_units),
-        "unprocessed": [tuple(row) for row in debug_unprocessed],
-        "processed": [tuple(row) for row in debug_processing],
-        "batches": [tuple(row) for row in debug_batches],
-        "boundaries": [tuple(row) for row in debug_boundaries],
-        "policy_max_input": pipeline.read_settings(db_a)["pipeline"]["max_input_chars"],
-        "frames": pipeline.routing_blocks(
-            [pipeline.task_message(row) for row in original_rows], 40000
-        ),
-    }
+        old = [tuple(row) for row in store.conn.execute(
+            "SELECT raw_id,outcome FROM raw_processing ORDER BY raw_id"
+        )]
+        assert old == [(1, "auto_boundary"), (2, "auto_boundary")], old
+        assert store.conn.execute(
+            "SELECT count(*) FROM raw_events"
+        ).fetchone()[0] == 2
+    assert asyncio.run(pipeline.advance(
+        db_a, include_recent=True, runner=synthetic_runner))["status"] == "current"
+
+    # Only NEW messages after re-enable are eligible for Event summarization.
+    recorded = raw_archive(Settings(db_a, writable=True)).ingest([
+        {"source_event_id": "m6-after-user", "session_id": "m6-summary",
+         "role": "user", "text": "M6_PRIVATE_ALPHA_AFTER_ENABLE",
+         "created_at": "2025-01-03T10:00:00Z"},
+        {"source_event_id": "m6-after-assistant", "session_id": "m6-summary",
+         "role": "assistant", "text": "M6_PRIVATE_ALPHA_AFTER_AGREEMENT",
+         "created_at": "2025-01-03T10:01:00Z"},
+    ], source="m6-synthetic")
+    assert recorded["inserted"] == 2
     completed_a = asyncio.run(pipeline.advance(
         db_a, include_recent=True, runner=synthetic_runner))
     assert completed_a.get("events") == 1, completed_a
     a_summaries, a_processed = snapshot(db_a)
-    assert a_processed == 2 and len(a_summaries) == 1
-    assert "M6_PRIVATE_ALPHA" in a_summaries[0]
+    assert a_processed == 4 and len(a_summaries) == 1
+    assert "M6_PRIVATE_ALPHA_AFTER_ENABLE" in a_summaries[0]
+    assert "M6_PRIVATE_ALPHA_BOOKCLUB" not in a_summaries[0]
     assert "M6_PRIVATE_BETA" not in a_summaries[0]
+    with Store(db_a, read_only=True) as store:
+        outcomes = [row["outcome"] for row in store.conn.execute(
+            "SELECT outcome FROM raw_processing ORDER BY raw_id"
+        )]
+        assert outcomes[:2] == ["auto_boundary", "auto_boundary"], outcomes
+        assert len(outcomes) == 4, outcomes
     assert snapshot(db_b) == (b_summaries, b_processed)
 
     # Restarting an already-completed pipeline pass must not summarize again.
