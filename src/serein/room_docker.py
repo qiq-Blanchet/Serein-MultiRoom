@@ -361,7 +361,12 @@ class DockerRuntime:
             "--publish", f"127.0.0.1:{port}:8080",
             "--memory", "1g", "--cpus", "1.0", "--pids-limit", "256",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-            "--read-only", "--tmpfs", "/tmp:rw,nosuid,noexec,size=32m",
+            "--read-only",
+            "--tmpfs", "/tmp:rw,nosuid,noexec,size=32m",
+            # Vite 6 bundles its preview config to node_modules/.vite-temp
+            # at process startup. Keep the image read-only; allow just that
+            # disposable directory to exist in memory with no persistence.
+            "--tmpfs", "/app/node_modules/.vite-temp:rw,nosuid,noexec,size=16m,mode=1777",
             "--mount", f"type=bind,src={routes_dir},dst=/control/gateway,readonly",
             "--mount", f"type=bind,src={manager_key_dir},dst=/control/secrets,readonly",
             "--env", "SEREIN_MULTIROOM_ROUTES_FILE=/control/gateway/routes.json",
