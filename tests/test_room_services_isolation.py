@@ -224,9 +224,12 @@ def test_real_summary_pipeline_keeps_auto_toggle_and_settled_events_in_their_roo
             rows = store.conn.execute(
                 "SELECT id FROM documents WHERE kind='event' AND lifecycle='active'"
             ).fetchall()
-            originals = store.conn.execute(
+            processing_exists = store.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='raw_processing'"
+            ).fetchone()
+            originals = (store.conn.execute(
                 "SELECT count(*) FROM raw_processing"
-            ).fetchone()[0]
+            ).fetchone()[0] if processing_exists else 0)
             summaries = [str(store.read(row["id"])) for row in rows]
             return summaries, originals
 
