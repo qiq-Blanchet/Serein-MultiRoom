@@ -659,5 +659,6 @@
   "docs/ROOMS_M5_FULL_ARCHIVES_PHASE2.md",
   "src/serein/room_restore.py",
   "tests/test_room_restore.py",
-  "docs/ROOMS_M5_RESTORE_PHASE3.md"
+  "docs/ROOMS_M5_RESTORE_PHASE3.md",
+  "docs/ROOMS_M6_REAL_DOCKER_PHASE1.md"
 ]
