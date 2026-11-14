@@ -551,15 +551,29 @@ def verify_dynamic_clone(manager: RoomManager, runtime: DockerRuntime,
 
     print("M6 Phase3: hot-add third room from first room's configuration", flush=True)
     before_a = read_settings(manager.room_dir(aid) / "data" / "serein.db")
-    third = manager.create("Synthetic Third", source="first", room_slug="third-main")
+    status, body, _ = dashboard_http(
+        "/__serein/rooms", method="POST",
+        payload={"room_slug": "third-main", "source": "first",
+                 "reuse_provider_keys": False})
+    assert status == 201, (status, body[:400])
+    third = json.loads(body)
     room = third["room"]
     cid = room["room_id"]
     c_key = third["gateway_key"]
+    assert "gateway_key" not in room
+    status, listing_raw, _ = dashboard_http("/__serein/rooms")
+    assert status == 200, (status, listing_raw[:400])
+    listing = json.loads(listing_raw)["rooms"]
+    assert "third-main" in {item["room_slug"] for item in listing}
+    assert "gateway_key" not in listing_raw.lower()
     containers.append(runtime.container_name(manager, room))
     assert room["source_room_id"] == aid
     assert len({a_key, b_key, c_key}) == 3
     assert manager.get(cid)["state"] == "stopped"
     assert request(GATEWAY + "/v1/models", token=c_key)[0] == 401
+    status, _, _ = dashboard_http(
+        "/__serein/rooms/select", method="POST", payload={"room_id": cid})
+    assert status == 409, status
     db = manager.room_dir(cid) / "data" / "serein.db"
     with Store(db, read_only=True) as store:
         assert store.conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
@@ -581,6 +595,18 @@ def verify_dynamic_clone(manager: RoomManager, runtime: DockerRuntime,
 
     manager.start(cid, runtime, wait_seconds=150)
     assert manager.get(cid)["state"] == "ready"
+    status, body, cookie_c = dashboard_http(
+        "/__serein/rooms/select", method="POST", payload={"room_id": cid})
+    assert status == 200 and cookie_c, (status, body[:200])
+    cookie_c = cookie_c.split(";", 1)[0]
+    status, view, _ = dashboard_http("/__serein/settings", cookie=cookie_c)
+    assert status == 200, (status, view[:400])
+    c_dashboard = json.loads(view)
+    assert c_dashboard["identity"]["ai_name"] == "AI"
+    assert {item["id"] for item in c_dashboard["available_models"]} == {
+        "alpha-only-model",
+    } or any("alpha-only-model" in item["id"]
+             for item in c_dashboard["available_models"])
     status, raw = request(GATEWAY + "/v1/models", token=c_key)
     assert status == 200, (status, raw[:300])
     assert [row["id"] for row in json.loads(raw)["data"]] == [
