@@ -203,8 +203,15 @@ def test_real_summary_pipeline_keeps_auto_toggle_and_settled_events_in_their_roo
 
     assert asyncio.run(pipeline.scheduled_advance(db_a))["status"] == "auto_paused"
     with Store(db_a, read_only=True) as store:
-        assert store.conn.execute("SELECT count(*) FROM raw_processing").fetchone()[0] == 0
-        assert store.conn.execute("SELECT count(*) FROM pipeline_batches").fetchone()[0] == 0
+        # A paused fresh room may not have initialized the pipeline schema at
+        # all; both absent tables and empty initialized tables are safe.
+        for table in ("raw_processing", "pipeline_batches"):
+            present = store.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            if present:
+                assert store.conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
 
     # Running the actual summarization contract in B creates B-only Event
     # evidence and marks B's original messages processed. No model API called.
