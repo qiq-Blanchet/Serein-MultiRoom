@@ -1,0 +1,46 @@
+name: M6 disposable real-Docker two-room smoke
+
+on:
+  push:
+    branches: [feature/multi-room]
+    paths:
+      - '.github/workflows/multiroom-docker-smoke.yml'
+      - 'tests/integration/docker_multiroom_smoke.py'
+      - 'src/**'
+      - 'web/**'
+      - 'Dockerfile'
+      - 'deploy/Gateway.Dockerfile'
+      - 'constraints-runtime.txt'
+      - 'pyproject.toml'
+      - 'scripts/rooms.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multiroom-docker-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-docker-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test harness and real MCP client
+        run: python -m pip install -e '.[test,http,background]'
+      - name: Verify Docker runner and no persistent rooms
+        run: |
+          docker version
+          test -S /var/run/docker.sock
+          test ! -e .runtime/multiroom/control/rooms.sqlite
+      - name: Build Serein core image from this exact fork commit
+        run: docker build --tag serein-multiroom:ci .
+      - name: Build unchanged original Dashboard image
+        run: docker build --file deploy/Gateway.Dockerfile --tag serein-multiroom-web:dev .
+      - name: Start two fake AI rooms and verify real network isolation
+        run: python -u tests/integration/docker_multiroom_smoke.py
