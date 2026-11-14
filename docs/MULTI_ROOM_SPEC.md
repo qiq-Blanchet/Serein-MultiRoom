@@ -2,7 +2,7 @@
 
 > **文档定位：** 本文件是 Serein-MultiRoom 项目的长期设计基线（source of truth），供以后的人类开发者及 AI 编程助手在上下文压缩、跨会话、多人协作后继续使用。实现前先读本文；如果某项实现与本文冲突，先提出变更，不要私自改变已经决定的产品方向。
 >
-> **状态：** 总体需求已确认；M1 房间管理内核、M2 Chat/MCP 静态网关、M3 原版 Dashboard 可选房间切换及第三阶段隔离 Docker 启动编排均已提交，离线模拟/构建回归已通过。Dashboard 沿用原版**用户自定义用户名＋密码**，内部管理员 Key 不用于网页登录；**M6 已用 GitHub-hosted Runner 完成真实 Docker 双房/第三房动态新增、原版 Dashboard 配置和自动摘要开关隔离、合成数据整房备份恢复、十次经本地假模型服务的并发聊天及原话归档、服务进程异常退出自动重启验证；真实 VPS 联机、真正模型后台摘要/梦境长负载、正式 HTTPS、全功能浏览器逐页验收、MCP OAuth、跨房统一备份和受控升级仍未完成**。下文中的接口、目录、命令和网页界面只要标为「建议／拟议」，就不是当前代码已经具备的功能。
+> **状态：** 总体需求已确认；M1 房间管理内核、M2 Chat/MCP 静态网关、M3 原版 Dashboard 可选房间切换及第三阶段隔离 Docker 启动编排均已提交，离线模拟/构建回归已通过。Dashboard 沿用原版**用户自定义用户名＋密码**，内部管理员 Key 不用于网页登录；**M6 已用 GitHub-hosted Runner 完成真实 Docker 双房/第三房动态新增、原版 Dashboard 配置和自动摘要开关隔离、合成数据整房备份恢复、十次经本地假模型服务的并发聊天及原话归档、服务进程异常退出自动重启、真实容器自动 Event 摘要三阶段私有假模型调用与单房重启后去重；真实 VPS 联机、第三方模型摘要/梦境长期负载、正式 HTTPS、全功能浏览器逐页验收、MCP OAuth、跨房统一备份和受控升级仍未完成**。下文中的接口、目录、命令和网页界面只要标为「建议／拟议」，就不是当前代码已经具备的功能。
 >
 > **建立日期：** 2026-11-08  
 > **目标仓库：** `qiq-Blanchet/Serein-MultiRoom`  
@@ -310,6 +310,7 @@ runtime/
 
 ### 实施记录（2026-11-09）
 
+- **M6 第四期真实 Docker 后台 Event 摘要（2026-11-14）**：B 房间在原版容器的真实后台定时器中经 Router/Curator/Writer 三阶段调用 Docker bridge 私有假模型，成功生成独立 Event 并结算新原话；A 自动摘要关闭，无模型调用及 Event 写入。B 有序停止后再次启动，Event/原话处理记录不变，已完成的模型阶段没有重复请求。Python 独立库回归覆盖原版 auto boundary 关闭/重新开启的费用保护。仍未进行真实外部模型长负载和 VPS systemd/HTTPS 验收。见 [ROOMS_M6_PHASE4_SUMMARY_BOUNDARY.md](ROOMS_M6_PHASE4_SUMMARY_BOUNDARY.md)。
 - **M6 第一期真实 Docker 验收（2026-11-14）**：GitHub Actions 临时 Runner 实际构建核心/Dashboard 镜像并运行两房记忆服务、Chat/MCP 网关、私有管理员服务及原版 Dashboard。真实网络中验证房间 Key、MCP tools/list/call、各自 Scene、A 停机时 B 继续服务；同房整房归档和 rollback 恢复通过，原 Gateway Key 不变。实测修复 Gateway/Dashboard 以文件主人 UID:GID 读取 0600 私有控制文件及只读 Vite 缓存。只使用合成数据，非用户 VPS。见 [ROOMS_M6_REAL_DOCKER_PHASE1.md](ROOMS_M6_REAL_DOCKER_PHASE1.md)。
 - **M5 第三阶段同房间受控恢复（2026-11-10）**：Dashboard 在已登录且选中目标房间后可上传同房间 ID 的旧备份、验证文件清单和 SQLite schema、显式输入该房间 ID 与归档 SHA-256 双重确认恢复；只交换当前房间 `config/` 和 `data/`，保留现有 `secrets/` 下的 Gateway Key、内部 Token。恢复前自动生成同房间回滚备份；断电中断时阻止房间直接启动，并提供故障恢复命令。正常 VPS 重启不重生 Gateway Key；完整自动恢复场景仍需实机验证。见 [ROOMS_M5_RESTORE_PHASE3.md](ROOMS_M5_RESTORE_PHASE3.md)。
 - **M5 第二阶段完整房间归档（2026-11-10；同日按用户反馈调整）**：房间数据、独立配置、附件、索引按独立目录备份，默认不包含 Gateway Key 与内部 API Token；SQLite 文件由 backup API 生成一致性副本；归档附带逐文件校验和与自定义房间 ID。旧 v1 含 Key 归档仍可只读预览，但不再要求 Key 与新环境一致。Dashboard 可在原「旧库迁移」内为当前房间创建/校验/下载完整归档，操作只临时停止本房间，其他房间继续运行；暂停房间不再自动回落另一 AI。恢复仍只允许预览，待独立恢复演练及回滚能力验收后再开放覆盖写入。见 [ROOMS_M5_FULL_ARCHIVES_PHASE2.md](ROOMS_M5_FULL_ARCHIVES_PHASE2.md)。
