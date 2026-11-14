@@ -1,15 +1,15 @@
 # M6 第二阶段：真实 Dashboard 跨房间读写与旧标签页保护
 
-> 2026-11-14，在 GitHub 托管 Runner 使用临时 Docker 网络、合成数据和假上游模型。只修改 \`feature/multi-room\`；没有接触生产 VPS、真实记忆或私人 API 密钥。
+> 2026-11-14，在 GitHub 托管 Runner 使用临时 Docker 网络、合成数据和假上游模型。只修改 `feature/multi-room`；没有接触生产 VPS、真实记忆或私人 API 密钥。
 
 ## 已在真实 Docker Runner 跑通
 
 - 成功记录：[M6 Dashboard 双房端到端 #43580544255](https://github.com/qiq-Blanchet/Serein-MultiRoom/actions/runs/43580544255)，[旧标签页防串房及备份列表 #43580934781](https://github.com/qiq-Blanchet/Serein-MultiRoom/actions/runs/43580934781)。
 - 两个独立 Serein 实例、独立数据库、统一 Chat/MCP Gateway、独立 Key 与原版 React Dashboard 同时运行；MCP 通过官方 Streamable HTTP 客户端验证。
 - 网页原版用户名/密码认证：未登录拒绝；房间列表只回传公开元数据；签名房间 Cookie 选择 A/B；无效房间、跨站请求和伪造内部目标头被拒绝。
-- 经真实网页网关的 \`GET/PATCH /__serein/settings\`：A/B 的上游模型列表不同；在 A 修改 AI 显示名、任务模型、备忘功能开关和自动摘要开关/超时，B 的对应设置和版本保持原值；旧设置版本会被原版接口拒绝。
+- 经真实网页网关的 `GET/PATCH /__serein/settings`：A/B 的上游模型列表不同；在 A 修改 AI 显示名、任务模型、备忘功能开关和自动摘要开关/超时，B 的对应设置和版本保持原值；旧设置版本会被原版接口拒绝。
 - 旧浏览器标签保护：原页面持有 A 的房间 ID、但浏览器已在另一标签切到 B 时，设置 PATCH 和自动摘要 POST 都返回 HTTP 409，不向 B 写入。此保护只是校验同房间一致性，不允许客户端自选房间。
-- 网页 MCP 权限 GET/POST 严格约束当前房间；经私有管理服务更改 A 的 MCP 白名单后，只重新启动 A。用官方 MCP 客户端重新建立连接检查 A 与 B 的实际 \`tools/list\`，B 保持可用。
+- 网页 MCP 权限 GET/POST 严格约束当前房间；经私有管理服务更改 A 的 MCP 白名单后，只重新启动 A。用官方 MCP 客户端重新建立连接检查 A 与 B 的实际 `tools/list`，B 保持可用。
 - 停止当前已选择的 A 后，网页返回安全的“房间已暂停”页面而不改用 B；人工重置选择后才进入 B。重启 A 后，原来的配置与 Gateway Key 仍保留。
 - 网页备份列表要求当前房间和标签目标一致；尝试用 A 的会话访问 B 的备份被 409 拒绝。整房备份/校验/回滚恢复仍由 M6 第一阶段的真实 Docker 测试覆盖。
 
