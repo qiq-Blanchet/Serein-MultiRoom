@@ -6,6 +6,7 @@ this installation-specific Docker network after authenticating the room key.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import time
@@ -24,6 +25,14 @@ class DockerRuntime:
         self.sleeper = sleeper or time.sleep
         self.memory = memory
         self.cpus = cpus
+
+    @staticmethod
+    def host_file_owner():
+        # Host control/room files are mode 0600 and directories 0700. The
+        # gateway/dashboard drop CAP_DAC_OVERRIDE, so even container-root
+        # cannot open host-owned secrets. Match the provisioning user's
+        # numeric identity instead of weakening secret filesystem modes.
+        return f"{os.getuid()}:{os.getgid()}"
 
     def _docker(self, *arguments, check=True):
         try:
@@ -198,6 +207,7 @@ class DockerRuntime:
             raise RoomError("Gateway route manifest is not available")
         self._docker(
             "run", "--detach", "--init",
+            "--user", self.host_file_owner(),
             "--name", self.gateway_name(manager),
             "--restart", "unless-stopped",
             "--label", "serein.multiroom.gateway=true",
@@ -342,7 +352,8 @@ class DockerRuntime:
         from .room_admin import read_admin_key
         read_admin_key(manager)  # Validate owner permissions and length.
         self._docker(
-            "run", "--detach", "--init", "--name", self.dashboard_name(manager),
+            "run", "--detach", "--init",
+            "--user", self.host_file_owner(), "--name", self.dashboard_name(manager),
             "--restart", "unless-stopped",
             "--label", "serein.multiroom.dashboard=true",
             "--label", "serein.multiroom.installation=" + manager.namespace,
