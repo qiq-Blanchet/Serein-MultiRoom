@@ -253,6 +253,14 @@ def test_real_summary_pipeline_keeps_auto_toggle_and_settled_events_in_their_roo
     assert len(original_units) == 1 and pipeline.dialogue_unit_is_complete(
         original_units[0]
     ), original_units
+    pipeline.initialize(db_a)
+    first_batch = pipeline.new_batch(db_a, include_recent=True)
+    assert first_batch is not None, {
+        "raw_rows": [(row["source"], row["session_id"], row["role"],
+                      row["created_at"]) for row in original_rows],
+        "unit_count": len(original_units),
+        "pipeline_policy": pipeline.read_settings(db_a)["pipeline"],
+    }
     completed_a = asyncio.run(pipeline.advance(
         db_a, include_recent=True, runner=synthetic_runner))
     assert completed_a.get("events") == 1, completed_a
