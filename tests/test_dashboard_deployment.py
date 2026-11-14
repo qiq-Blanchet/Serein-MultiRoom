@@ -122,6 +122,12 @@ def test_original_dashboard_container_uses_internal_routes_not_room_db_mounts(tm
     assert all(str(manager.root / "rooms" / room["room_id"]) not in mount
                for room in manager.list_rooms() for mount in mounts)
     assert "--read-only" in dashboard_cmd and "--cap-drop" in dashboard_cmd
+    tmpfs_mounts = [dashboard_cmd[i + 1] for i, item in enumerate(dashboard_cmd)
+                   if item == "--tmpfs"]
+    assert "/tmp:rw,nosuid,noexec,size=32m" in tmpfs_mounts
+    assert any(v.startswith("/app/node_modules/.vite-temp:") and
+               "size=16m" in v and "noexec" in v for v in tmpfs_mounts)
+    assert len(tmpfs_mounts) == 2
     runtime.stop_dashboard(manager)
     assert runtime.dashboard_status(manager)["container"] == "exited"
 
