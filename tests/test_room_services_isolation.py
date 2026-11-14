@@ -167,3 +167,82 @@ def test_dream_mood_memo_and_summary_feature_state_stays_per_room(tmp_path):
             ("memo-generated",),
         ).fetchone()[0]
         assert "PRIVATE_B" not in value and "PRIVATE_A_" in value
+
+
+def test_real_summary_pipeline_keeps_auto_toggle_and_settled_events_in_their_room(tmp_path):
+    """Exercise the real Event summarizer with fake model outputs, no HTTP/API key.
+
+    This is stronger than merely checking that different worker objects receive
+    different database paths: the persistent raw/events/processed tables are
+    actually updated, and a paused room must not inherit the other room's work.
+    """
+    from serein.compat.raw_archive import raw_archive
+    from serein.deployment import save_settings
+    from serein.extensions import pipeline
+    from test_public_features import synthetic_runner
+
+    manager = RoomManager(tmp_path / "isolated-background")
+    first = manager.create("First AI", source="blank")["room"]["room_id"]
+    second = manager.create("Second AI", source="blank")["room"]["room_id"]
+    db_a = manager.room_dir(first) / "data" / "serein.db"
+    db_b = manager.room_dir(second) / "data" / "serein.db"
+    save_settings(db_a, {"pipeline": {"auto_enabled": False}})
+    save_settings(db_b, {"pipeline": {"auto_enabled": True}})
+
+    for db, label in ((db_a, "ALPHA"), (db_b, "BETA")):
+        instance = Settings(db, writable=True)
+        result = raw_archive(instance).ingest([
+            {"source_event_id": "m6-user", "session_id": "m6-summary",
+             "role": "user", "text": f"M6_PRIVATE_{label}_BOOKCLUB",
+             "created_at": "2025-01-02T10:00:00Z"},
+            {"source_event_id": "m6-assistant", "session_id": "m6-summary",
+             "role": "assistant", "text": f"M6_PRIVATE_{label}_AGREEMENT",
+             "created_at": "2025-01-02T10:01:00Z"},
+        ], source="m6-synthetic")
+        assert result["inserted"] == 2
+
+    assert asyncio.run(pipeline.scheduled_advance(db_a))["status"] == "auto_paused"
+    with Store(db_a, read_only=True) as store:
+        assert store.conn.execute("SELECT count(*) FROM raw_processing").fetchone()[0] == 0
+        assert store.conn.execute("SELECT count(*) FROM pipeline_batches").fetchone()[0] == 0
+
+    # Running the actual summarization contract in B creates B-only Event
+    # evidence and marks B's original messages processed. No model API called.
+    completed_b = asyncio.run(pipeline.advance(
+        db_b, include_recent=True, runner=synthetic_runner))
+    assert completed_b["events"] == 1, completed_b
+
+    def snapshot(db):
+        with Store(db, read_only=True) as store:
+            rows = store.conn.execute(
+                "SELECT id FROM documents WHERE kind='event' AND lifecycle='active'"
+            ).fetchall()
+            originals = store.conn.execute(
+                "SELECT count(*) FROM raw_processing"
+            ).fetchone()[0]
+            summaries = [str(store.read(row["id"])) for row in rows]
+            return summaries, originals
+
+    b_summaries, b_processed = snapshot(db_b)
+    a_summaries, a_processed = snapshot(db_a)
+    assert b_processed == 2 and len(b_summaries) == 1
+    assert "M6_PRIVATE_BETA" in b_summaries[0]
+    assert "M6_PRIVATE_ALPHA" not in b_summaries[0]
+    assert a_summaries == [] and a_processed == 0
+
+    # Enable the first room, then actually settle its own original pair.
+    save_settings(db_a, {"pipeline": {"auto_enabled": True}})
+    completed_a = asyncio.run(pipeline.advance(
+        db_a, include_recent=True, runner=synthetic_runner))
+    assert completed_a["events"] == 1, completed_a
+    a_summaries, a_processed = snapshot(db_a)
+    assert a_processed == 2 and len(a_summaries) == 1
+    assert "M6_PRIVATE_ALPHA" in a_summaries[0]
+    assert "M6_PRIVATE_BETA" not in a_summaries[0]
+    assert snapshot(db_b) == (b_summaries, b_processed)
+
+    # Restarting an already-completed pipeline pass must not summarize again.
+    assert asyncio.run(pipeline.advance(
+        db_b, include_recent=True, runner=synthetic_runner))["status"] == "current"
+    assert snapshot(db_a) == (a_summaries, a_processed)
+    assert snapshot(db_b) == (b_summaries, b_processed)
