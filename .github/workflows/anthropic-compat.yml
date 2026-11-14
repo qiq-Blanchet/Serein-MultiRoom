@@ -51,8 +51,8 @@ jobs:
         run: npm ci --prefix web
       - name: Check authenticated multi-room routing and storage tests
         run: node --test web/tests/room-session.test.mjs web/tests/room-dashboard-routes.test.mjs web/tests/room-import-export.test.mjs web/tests/backup-download.test.mjs
-      - name: Run full original Dashboard JavaScript regression suite
-        run: npm --prefix web test
+      - name: Run complete Dashboard JavaScript suite without Vite port contention
+        run: cd web && node --test --test-concurrency=1 tests/*.test.mjs
       - name: Build original React Dashboard with opt-in room selector
         run: npm --prefix web run build
       - name: Check web gateway JavaScript syntax
