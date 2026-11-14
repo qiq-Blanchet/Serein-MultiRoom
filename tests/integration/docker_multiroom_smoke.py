@@ -129,6 +129,188 @@ async def verify_mcp(a_key: str, b_key: str):
     await probe(b_key, {"recall_memory"}, "scene-BETA", "", "scene-ALPHA")
 
 
+
+
+def dashboard_http(path: str, *, method: str = "GET", cookie: str | None = None,
+                   payload: dict | None = None, authenticated: bool = True,
+                   extra_headers: dict | None = None):
+    """Call the actual web Gateway, never the private control plane directly."""
+    headers = {"Accept": "application/json"}
+    if authenticated:
+        encoded = base64.b64encode((USERNAME + ":" + PASSWORD).encode()).decode()
+        headers["Authorization"] = "Basic " + encoded
+    if cookie:
+        headers["Cookie"] = cookie
+    if extra_headers:
+        headers.update(extra_headers)
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(DASHBOARD + path, data=body,
+                                 headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=100) as response:
+            return (response.status,
+                    response.read().decode("utf-8", errors="replace"),
+                    response.headers.get("Set-Cookie"))
+    except urllib.error.HTTPError as error:
+        return (error.code, error.read().decode("utf-8", errors="replace"),
+                error.headers.get("Set-Cookie"))
+
+
+async def verify_mcp_lists(a_key: str, b_key: str):
+    async def read_tools(key):
+        async with httpx.AsyncClient(
+            headers={"Authorization": "Bearer " + key},
+            timeout=httpx.Timeout(45), trust_env=False,
+        ) as client:
+            async with streamable_http_client(
+                GATEWAY + "/serein/mcp", http_client=client,
+            ) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return {tool.name for tool in (await session.list_tools()).tools}
+    assert await read_tools(a_key) == {"read_memory", "recall_memory"}
+    assert await read_tools(b_key) == {"recall_memory"}
+
+
+def verify_live_dashboard(manager: RoomManager, runtime: DockerRuntime,
+                          aid: str, bid: str, a_key: str, b_key: str):
+    """M6 second phase: authenticated, real-Docker room-scoped Dashboard writes."""
+    print("M6 Dashboard: checking login, room selection and forged headers", flush=True)
+    status, _, _ = dashboard_http("/__serein/rooms", authenticated=False)
+    assert status == 401, status
+    status, _, _ = dashboard_http("/__serein/settings", authenticated=False)
+    assert status == 401, status
+    status, _, _ = dashboard_http("/__serein/rooms/select", method="POST",
+                                  payload={"room_id": aid}, authenticated=False)
+    assert status == 401, status
+    status, _, _ = dashboard_http("/__serein/rooms/select", method="POST",
+                                  payload={"room_id": aid},
+                                  extra_headers={"Origin": "https://cross-site.invalid"})
+    assert status == 403, status
+    status, _, _ = dashboard_http("/__serein/rooms/select", method="POST",
+                                  payload={"room_id": "f" * 32})
+    assert status == 409, status
+    status, _, _ = dashboard_http("/__serein/rooms", method="POST",
+                                  payload={"room_slug": "../invalid"})
+    assert status == 400, status
+    status, _, cookie_a = dashboard_http("/__serein/rooms/select", method="POST",
+                                         payload={"room_id": aid})
+    assert status == 200 and cookie_a and "HttpOnly" in cookie_a, (status, cookie_a)
+    cookie_a = cookie_a.split(";", 1)[0]
+    status, _, cookie_b = dashboard_http("/__serein/rooms/select", method="POST",
+                                         payload={"room_id": bid}, cookie=cookie_a)
+    assert status == 200 and cookie_b and "HttpOnly" in cookie_b, (status, cookie_b)
+    cookie_b = cookie_b.split(";", 1)[0]
+    for cookie, expected in ((cookie_a, aid), (cookie_b, bid)):
+        status, body, _ = dashboard_http("/__serein/rooms/current", cookie=cookie)
+        assert status == 200 and json.loads(body)["room_id"] == expected, (status, body)
+        status, body, _ = dashboard_http("/__serein/rooms", cookie=cookie)
+        assert status == 200 and json.loads(body)["current"] == expected, (status, body)
+        assert "gateway_key" not in body.lower()
+        assert "internal_token" not in body.lower()
+
+    print("M6 Dashboard: reading and saving model/feature/summary settings", flush=True)
+    status, a_body, _ = dashboard_http("/__serein/settings", cookie=cookie_a)
+    assert status == 200, (status, a_body[:300])
+    status, b_body, _ = dashboard_http("/__serein/settings", cookie=cookie_b)
+    assert status == 200, (status, b_body[:300])
+    assert "alpha-only-model" in a_body and "beta-only-model" not in a_body
+    assert "beta-only-model" in b_body and "alpha-only-model" not in b_body
+    a_before, b_before = json.loads(a_body), json.loads(b_body)
+    a_model = next(item["id"] for item in a_before["available_models"]
+                   if "alpha-only-model" in item["id"])
+    assert a_before["features"]["memos"] is False
+    assert b_before["features"]["memos"] is False
+    assert b_before["pipeline"]["auto_enabled"] is True
+    patch = {"expected_version": a_before["settings_version"],
+             "identity": {"ai_name": "CI Dashboard Alpha"},
+             "features": {"memos": True},
+             "assignments": {"event_writer": a_model},
+             "pipeline": {"auto_enabled": False, "timeout_seconds": 601}}
+    status, updated_body, _ = dashboard_http("/__serein/settings", method="PATCH",
+                                              cookie=cookie_a, payload=patch)
+    assert status == 200, (status, updated_body[:450])
+    a_updated = json.loads(updated_body)
+    assert a_updated["identity"]["ai_name"] == "CI Dashboard Alpha"
+    assert a_updated["features"]["memos"] is True
+    assert a_updated["assignments"]["event_writer"] == a_model
+    assert a_updated["pipeline"]["auto_enabled"] is False
+    assert a_updated["pipeline"]["timeout_seconds"] == 601
+    assert a_updated["settings_version"] > a_before["settings_version"]
+    status, body, _ = dashboard_http("/__serein/settings", cookie=cookie_b)
+    assert status == 200, (status, body[:250])
+    b_after = json.loads(body)
+    assert b_after["identity"] == b_before["identity"]
+    assert b_after["features"]["memos"] is False
+    assert b_after["pipeline"]["auto_enabled"] is True
+    assert b_after["settings_version"] == b_before["settings_version"]
+    assert b_after["assignments"].get("event_writer") != a_model
+    status, body, _ = dashboard_http("/__serein/settings", method="PATCH",
+                                      cookie=cookie_a, payload=patch)
+    assert status == 409, (status, body[:250])
+    status, body, _ = dashboard_http(
+        "/__serein/settings", cookie=cookie_a,
+        extra_headers={"X-Serein-Verified-Room": bid,
+                       "X-Serein-Verified-Proof": "forged"})
+    assert status == 200 and json.loads(body)["identity"]["ai_name"] == "CI Dashboard Alpha"
+    for cookie in (cookie_a, cookie_b):
+        status, body, _ = dashboard_http("/__serein/pipeline/status", cookie=cookie)
+        assert status == 200 and isinstance(json.loads(body), dict), (status, body[:300])
+
+    print("M6 Dashboard: checking per-room MCP administrator access", flush=True)
+    status, body, _ = dashboard_http(
+        "/__serein/rooms/" + bid + "/mcp-tools", cookie=cookie_a)
+    assert status == 403, (status, body)
+    status, body, _ = dashboard_http(
+        "/__serein/rooms/" + aid + "/mcp-tools", method="POST",
+        cookie=cookie_b, payload={"mode": "custom", "tools": []})
+    assert status == 403, (status, body)
+    for cookie, room_id, expected in (
+        (cookie_a, aid, ["read_memory"]),
+        (cookie_b, bid, ["recall_memory"]),
+    ):
+        status, body, _ = dashboard_http(
+            "/__serein/rooms/" + room_id + "/mcp-tools", cookie=cookie)
+        assert status == 200 and json.loads(body)["tools"] == expected, (status, body)
+
+    print("M6 Dashboard: changing A MCP permission restarts A only", flush=True)
+    status, body, _ = dashboard_http(
+        "/__serein/rooms/" + aid + "/mcp-tools", method="POST",
+        cookie=cookie_a,
+        payload={"mode": "custom", "tools": ["read_memory", "recall_memory"]})
+    assert status == 200, (status, body[:350])
+    assert manager.get(aid)["state"] == manager.get(bid)["state"] == "ready"
+    assert manager.mcp_permissions(aid)["tools"] == ["read_memory", "recall_memory"]
+    assert manager.mcp_permissions(bid)["tools"] == ["recall_memory"]
+    asyncio.run(verify_mcp_lists(a_key, b_key))
+    verify_models(a_key, b_key)
+
+    print("M6 Dashboard: stopped selected AI cannot fall through to B", flush=True)
+    manager.stop(aid, runtime)
+    status, body, _ = dashboard_http(
+        "/", cookie=cookie_a, extra_headers={"Accept": "text/html"})
+    assert status == 503 and "当前 AI 房间暂时未运行" in body, (status, body[:350])
+    status, body, _ = dashboard_http("/__serein/rooms/current", cookie=cookie_a)
+    assert status == 200 and json.loads(body)["room_id"] is None, (status, body)
+    status, body, _ = dashboard_http(
+        "/__serein/rooms/select", method="POST", cookie=cookie_b,
+        payload={"room_id": aid})
+    assert status == 409, (status, body)
+    assert request(GATEWAY + "/v1/models", token=b_key)[0] == 200
+    status, body, cleared = dashboard_http(
+        "/__serein/rooms/reset", method="POST", cookie=cookie_a, payload={})
+    assert status == 200 and json.loads(body)["cleared"] and "Max-Age=0" in cleared
+    status, body, _ = dashboard_http("/__serein/rooms/current")
+    assert status == 200 and json.loads(body)["room_id"] == bid, (status, body)
+    manager.start(aid, runtime, wait_seconds=150)
+    status, body, _ = dashboard_http("/__serein/settings", cookie=cookie_a)
+    assert status == 200, (status, body[:300])
+    assert json.loads(body)["identity"]["ai_name"] == "CI Dashboard Alpha"
+    verify_models(a_key, b_key)
+
 def run():
     assert shutil.which("docker"), "Docker executable is required"
     subprocess.run(["docker", "info"], check=True, capture_output=True)
@@ -247,6 +429,8 @@ def run():
                 }
                 assert "gateway_key" not in data.lower()
                 assert manager.get(aid)["state"] == manager.get(bid)["state"] == "ready"
+                verify_live_dashboard(manager, runtime, aid, bid,
+                                      a["gateway_key"], b["gateway_key"])
             print("M6 Docker PASS: real rooms, MCP, Gateway and Dashboard isolated", flush=True)
         except BaseException:
             print("M6 Docker diagnostic: status and tail of synthetic test containers", flush=True)
