@@ -79,6 +79,30 @@ Serein 网关在完整成功后归档当前用户原话和最终助手正文，�
 
 脚本 Hook 只在本地 Codex CLI／桌面 Codex 执行。云端编排的 ChatGPT Work、普通网页和移动端不会运行这类本地脚本；这些界面仍可通过 MCP 主动读写 Serein，但当前不能使用此自动召回与反向归档环路。
 
+## 真实登录态验收（只在 Runner 所在电脑／VPS 执行）
+
+单元测试的模拟响应无法证明 ChatGPT 订阅登录态与模型权限。请在已经通过 `codex login` 登录、已启动 `serein-codex-runner` 的机器上运行下面的只读验收。**不要把 ChatGPT 的登录文件、OAuth 令牌或 Runner Token 粘贴到聊天／GitHub Issue／Actions 日志中。** 脚本只通过进程环境读取 Runner 内部 Token，不会执行客户端的真实工具。
+
+Linux/macOS（沿用启动 Runner 时设定的 `SEREIN_CODEX_RUNNER_TOKEN`）：
+
+```sh
+python scripts/smoke_codex_runner.py --model <实际可用的模型ID>
+# 可选：验证 Base64 内联图片
+python scripts/smoke_codex_runner.py --model <实际可用的模型ID> --image /path/to/test.png
+```
+
+Windows PowerShell：
+
+```powershell
+py -3 scripts/smoke_codex_runner.py --model <实际可用的模型ID>
+# 可选：附加图片文件
+py -3 scripts/smoke_codex_runner.py --model <实际可用的模型ID> --image "C:\\path\\to\\test.png"
+```
+
+脚本依次测试：模型列表、真实订阅推理、流式响应、客户端自定义 `lookup` 工具调用与 `role: tool` 续轮，以及可选图片识别。它仅连接 `http://127.0.0.1:4501/v1` 等本机地址，绝不会把 Runner Token 发往外部网址。图片请求只验证服务端是否完成回答，回答是否准确仍需人工判断。
+
+上述脚本直接测试 Runner；Serein 的记忆注入、工具回复重放、原话归档与自动 Event 还必须用完整的 `客户端 → Serein Gateway → Runner` 路径再次验证。此分支不能在没有真实登录态时声称这些端到端验收已通过。
+
 ## 验收顺序
 
 1. Runner 的 `/health` 正常，带内部 Token 的 `/v1/models` 能列出模型。
