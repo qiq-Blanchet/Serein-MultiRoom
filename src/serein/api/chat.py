@@ -215,10 +215,14 @@ def routes(settings, services, auth):
         model = task_model(settings.database, 'chat', requested=str(body.get('model') or ''))
         if not model:
             raise HTTPException(503, 'Configure upstreams and models in Settings')
+        # An Eyes transcription outage must not tell a native-vision Codex
+        # model that it cannot see the inline image still present in its input.
+        if model.get('protocol') == 'codex' and image_receipt.get('fallback') == 'text_only':
+            image_context = ''
         cache_contract={'model':{k:v for k,v in model.items() if k!='api_key'}, 'memory':use_memory,
                         'operit':state['upstream']['operit_enabled'], 'identity':state['identity'],
                         'features':state['features'],'assignments':state['assignments'], 'resume':state['resume'],
-                        'eyes_fallback':image_receipt.get('fallback') == 'text_only',
+                        'eyes_fallback':image_receipt.get('fallback') == 'text_only' and model.get('protocol') != 'codex',
                         'clock':state['clock']}
         cache_window = window_id + ':' + digest(encode(cache_contract)) if window_id else uuid4().hex
         resume_query = chat_resume.continuation(query)
