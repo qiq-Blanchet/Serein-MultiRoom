@@ -82,6 +82,33 @@ def _image_urls(content: Any) -> list[str]:
 
 def completion_options(payload: dict[str, Any]) -> dict[str, Any]:
     """Reject behavior-changing unsupported options instead of ignoring them."""
+    efforts = {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+    choices: list[str] = []
+    direct = payload.get("reasoning_effort")
+    if direct is not None:
+        if not isinstance(direct, str) or direct not in efforts:
+            raise ValueError("Unsupported Codex reasoning_effort")
+        choices.append(direct)
+    reasoning = payload.get("reasoning")
+    if reasoning is not None:
+        if not isinstance(reasoning, dict) or set(reasoning) != {"effort"}:
+            raise ValueError("Codex reasoning accepts only an effort field")
+        value = reasoning["effort"]
+        if not isinstance(value, str) or value not in efforts:
+            raise ValueError("Unsupported Codex reasoning.effort")
+        choices.append(value)
+    thinking = payload.get("thinking")
+    if thinking is not None:
+        if not isinstance(thinking, dict) or set(thinking) != {"type"}:
+            raise ValueError("Codex thinking accepts only a type/effort shorthand")
+        kind = thinking["type"]
+        value = "none" if kind == "disabled" else kind
+        if not isinstance(value, str) or value not in efforts:
+            raise ValueError("Unsupported Codex thinking.type")
+        choices.append(value)
+    if len(set(choices)) > 1:
+        raise ValueError("Conflicting Codex reasoning effort settings")
+    effort = choices[0] if choices else None
     for key in ("temperature", "top_p"):
         val = payload.get(key)
         if val is not None and (type(val) not in (int, float) or val != 1):
@@ -122,7 +149,7 @@ def completion_options(payload: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError("json_schema requires a schema object")
         elif fmt.get("type") != "text":
             raise ValueError("Unsupported Codex response_format")
-    return {"output_schema": schema, "tool_choice": choice}
+    return {"output_schema": schema, "tool_choice": choice, "effort": effort}
 
 
 def dynamic_tools(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -353,6 +380,8 @@ class CodexAppServer:
                                   "readableRoots":[str(self.config.workdir)]}}}
                 if controls["output_schema"] is not None:
                     turn_params["outputSchema"] = controls["output_schema"]
+                if controls["effort"] is not None:
+                    turn_params["effort"] = controls["effort"]
                 turn = await self._request("turn/start", turn_params)
                 turn_data = turn.get("turn") if isinstance(turn.get("turn"), dict) else {}
                 turn_id = str(turn_data.get("id") or "")
@@ -467,7 +496,7 @@ def create_runner_app(config: RunnerConfig, server: CodexAppServer | None = None
     @app.post("/v1/chat/completions", dependencies=auth)
     async def chat(body: dict):
         if body.keys() - {"model","messages","stream","stream_options","n","response_format",
-                          "temperature","top_p","max_tokens",
+                          "temperature","top_p","reasoning_effort","reasoning","thinking","max_tokens",
                           "max_completion_tokens","stop","user","serein","tools","tool_choice",
                           "parallel_tool_calls"}:
             raise HTTPException(400, "Codex runner received unsupported Chat Completions fields")
