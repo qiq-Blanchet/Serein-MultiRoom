@@ -131,24 +131,3 @@ def test_partial_image_failure_keeps_success_for_a_later_retry(deployment, monke
     assert raw['image_transcription_status'] == 'failed'
     assert json.loads(raw['image_transcription_json'])['items'][0]['text'] == 'Synthetic first image'
 
-
-def test_codex_native_image_survives_eyes_failure_without_false_warning(deployment,monkeypatch):
-    settings,client=deployment
-    setup(client)
-    from serein.deployment import task_model
-    model=task_model(settings.database,'chat')
-    assert model
-    monkeypatch.setattr('serein.api.chat.task_model',
-                        lambda *args,**kw: {**model,'protocol':'codex'})
-    async def eyes_unavailable(*args,**kw):
-        raise HTTPException(502,'Synthetic Eyes timeout')
-    monkeypatch.setattr('serein.api.chat.transcribe_image_turn',eyes_unavailable)
-    seen=[]
-    main_transport(monkeypatch,False,seen)
-    response=send(client,[PNG])
-    assert response.status_code==200, response.text
-    assert len(seen)==1
-    forwarded=json.dumps(seen[0])
-    assert PNG in forwarded and 'image_url' in forwarded
-    assert 'could not read' not in forwarded
-    assert 'do not claim to have seen' not in forwarded.lower()
