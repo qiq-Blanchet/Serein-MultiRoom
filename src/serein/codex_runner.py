@@ -354,6 +354,17 @@ class CodexAppServer:
                     params = message.get("params") if isinstance(message.get("params"), dict) else {}
                     if params.get("threadId") and params["threadId"] != thread_id:
                         continue
+                    if method == "thread/tokenUsage/updated":
+                        info = params.get("tokenUsage") if isinstance(params.get("tokenUsage"), dict) else {}
+                        last = info.get("last") if isinstance(info.get("last"), dict) else {}
+                        if all(type(last.get(k)) is int for k in ("inputTokens", "outputTokens")):
+                            prompt_tokens = last["inputTokens"]
+                            completion_tokens = last["outputTokens"]
+                            yield {"type":"usage", "usage":{
+                                "prompt_tokens":prompt_tokens,
+                                "completion_tokens":completion_tokens,
+                                "total_tokens":prompt_tokens + completion_tokens,
+                                "prompt_tokens_details":{"cached_tokens":last.get("cachedInputTokens", 0)}}}
                     if method == "item/started":
                         item = params.get("item") if isinstance(params.get("item"), dict) else {}
                         if item.get("type") == "agentMessage":
@@ -439,12 +450,15 @@ def create_runner_app(config: RunnerConfig, server: CodexAppServer | None = None
         if not body.get("stream"):
             final = ""
             tool_call = None
+            usage = None
             try:
                 async for event in runtime.events(body):
                     if event["type"] == "completed":
                         final = event["text"]
                     elif event["type"] == "tool_call":
                         tool_call = event
+                    elif event["type"] == "usage":
+                        usage = event["usage"]
             except ValueError as error:
                 raise HTTPException(400, str(error)) from None
             except (OSError, asyncio.TimeoutError, CodexRunnerError):
@@ -455,13 +469,17 @@ def create_runner_app(config: RunnerConfig, server: CodexAppServer | None = None
                 message["tool_calls"] = [{"id":tool_call["id"], "type":"function", "function":{
                     "name":tool_call["name"], "arguments":tool_call["arguments"]}}]
                 finish_reason = "tool_calls"
-            return {"id":identifier, "object":"chat.completion", "created":created,
-                    "model":body.get("model"), "choices":[{"index":0,
-                        "message":message, "finish_reason":finish_reason}]}
+            result = {"id":identifier, "object":"chat.completion", "created":created,
+                      "model":body.get("model"), "choices":[{"index":0,
+                          "message":message, "finish_reason":finish_reason}]}
+            if usage is not None:
+                result["usage"] = usage
+            return result
 
         async def chunks():
             role_sent = False
             tool_called = False
+            final_usage = None
             try:
                 async for event in runtime.events(body):
                     if event["type"] == "tool_call":
@@ -473,6 +491,9 @@ def create_runner_app(config: RunnerConfig, server: CodexAppServer | None = None
                         chunk = {"id":identifier, "object":"chat.completion.chunk", "created":created,
                             "model":body.get("model"), "choices":[{"index":0,"delta":delta,"finish_reason":None}]}
                         yield "data: " + json.dumps(chunk, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+                        continue
+                    if event["type"] == "usage":
+                        final_usage = event["usage"]
                         continue
                     if event["type"] != "delta":
                         continue
@@ -487,6 +508,11 @@ def create_runner_app(config: RunnerConfig, server: CodexAppServer | None = None
                     "model":body.get("model"), "choices":[{"index":0,"delta":{},
                         "finish_reason":"tool_calls" if tool_called else "stop"}]}
                 yield "data: " + json.dumps(finish, separators=(",", ":")) + "\n\n"
+                if body.get("stream_options", {}).get("include_usage") and final_usage is not None:
+                    usage_chunk = {"id":identifier, "object":"chat.completion.chunk",
+                        "created":created, "model":body.get("model"),
+                        "choices":[], "usage":final_usage}
+                    yield "data: " + json.dumps(usage_chunk, separators=(",", ":")) + "\n\n"
                 yield "data: [DONE]\n\n"
             except (ValueError, OSError, asyncio.TimeoutError, CodexRunnerError):
                 yield 'data: {"error":{"message":"Codex App Server failed to complete the turn","type":"upstream_error"}}\n\n'
