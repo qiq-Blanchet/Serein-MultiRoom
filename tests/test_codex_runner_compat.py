@@ -203,3 +203,63 @@ def test_nonstream_usage_matches_codex_usage_event(tmp_path):
         assert result.status_code == 200
         assert result.json()["usage"]["total_tokens"] == 154
         assert result.json()["usage"]["prompt_tokens_details"]["cached_tokens"] == 12
+
+
+class PhasedAppServer(ScriptedAppServer):
+    async def _request(self, method, params):
+        response = await super()._request(method, params)
+        if method == "turn/start":
+            self.notifications.insert(0, {
+                "method": "item/completed", "params": {
+                    "threadId": "thread-test",
+                    "item": {"id": "intermediate", "type": "agentMessage",
+                             "phase": "analysis", "text": "private intermediate message"}}})
+            self.notifications.insert(0, {
+                "method": "item/agentMessage/delta", "params": {
+                    "threadId": "thread-test", "itemId": "intermediate",
+                    "phase": "analysis", "delta": "private intermediate message"}})
+            self.notifications.insert(0, {
+                "method": "item/completed", "params": {
+                    "threadId": "thread-test",
+                    "item": {"id": "commentary", "type": "agentMessage",
+                             "phase": "commentary", "text": "not the final answer"}}})
+            self.notifications.insert(0, {
+                "method": "item/agentMessage/delta", "params": {
+                    "threadId": "thread-test", "itemId": "commentary",
+                    "phase": "commentary", "delta": "not the final answer"}})
+        return response
+
+
+def test_codex_stream_excludes_intermediate_message_phases(tmp_path):
+    server = PhasedAppServer(tmp_path)
+    with TestClient(create_runner_app(server.config, server)) as client:
+        response = client.post("/v1/chat/completions", headers=HEADERS, json={
+            "model": "test-codex", "messages": [{"role": "user", "content": "Hello"}],
+            "stream": True})
+        assert response.status_code == 200
+        assert "A test reply" in response.text
+        assert "private intermediate message" not in response.text
+        assert "not the final answer" not in response.text
+
+
+def test_codex_nonstream_prefers_final_answer_over_intermediate_phases(tmp_path):
+    server = PhasedAppServer(tmp_path)
+    with TestClient(create_runner_app(server.config, server)) as client:
+        response = client.post("/v1/chat/completions", headers=HEADERS, json={
+            "model": "test-codex", "messages": [{"role": "user", "content": "Hello"}]})
+        assert response.status_code == 200
+        assert response.json()["choices"][0]["message"]["content"] == "A test reply"
+
+
+@pytest.mark.parametrize("options", [
+    {"max_tokens": 0}, {"max_completion_tokens": -1},
+    {"max_tokens": "4096"}, {"max_tokens": 1024, "max_completion_tokens": 2048},
+])
+def test_invalid_or_conflicting_token_bounds_are_rejected(tmp_path, options):
+    server = ScriptedAppServer(tmp_path)
+    with TestClient(create_runner_app(server.config, server)) as client:
+        response = client.post("/v1/chat/completions", headers=HEADERS, json={
+            "model": "test-codex", "messages": [{"role": "user", "content": "Hello"}],
+            **options})
+        assert response.status_code == 400
+    assert not server.calls
