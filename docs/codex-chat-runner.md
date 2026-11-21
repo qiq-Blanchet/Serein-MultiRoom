@@ -71,7 +71,7 @@ Codex 上游不使用 Serein 的 prompt cache 选项；线程与账户侧缓存�
 
 客户端发送的 OpenAI function tools 会映射为 Codex App Server 的实验性 `dynamicTools`。Codex 要调用工具时，Runner 返回标准 Chat Completions `tool_calls`；**客户端原有的 MCP／本地工具仍由客户端执行**，客户端再把 `role: tool` 结果续发，Runner 按原有对话历史继续生成。这里不需要把客户端的工具安装进 Codex 工作目录，也不允许 Codex 替客户端执行文件、命令或其他本地操作。
 
-当前每次模型响应只桥接一个工具调用，并要求 Codex 串行请求客户端工具；工具结果中的文字及 Base64 内联图片会继续传给模型。支持文字与 OpenAI Chat Completions 的 Base64 内联 `image_url`（当前消息、历史消息和客户端工具结果）；为避免 Runner 代客户端访问内部网络，暂不支持 HTTP(S) 图片 URL，也不支持音频／视频、多工具并行、旧 `functions` 字段以及所有的自定义响应选项。`max_tokens` 与 `max_completion_tokens` 当前仅校验格式，App Server 没有等价的逐请求输出长度限制映射，不能依赖它们强制截断生成。对不支持且会改变行为的选项明确返回 400，不默默吞掉参数。支持 `tool_choice=auto/none`，以及 `response_format=json_object/json_schema` 映射到 App Server 的 `outputSchema`；`stream_options.include_usage` 仅在 App Server 实际报告 token 数量时返回用量。带图片的真实模型验收仍是上线前置条件；如果前端只发远程图片 URL，应先在客户端转为内联图片，或者临时切回已支持远程图片的上游。
+当前每次模型响应只桥接一个工具调用，并要求 Codex 串行请求客户端工具；工具结果中的文字及 Base64 内联图片会继续传给模型。支持文字与 OpenAI Chat Completions 的 Base64 内联 `image_url`（当前消息、历史消息和客户端工具结果）；为避免 Runner 代客户端访问内部网络，暂不支持 HTTP(S) 图片 URL，也不支持音频／视频、多工具并行、旧 `functions` 字段以及所有的自定义响应选项。`max_tokens` 与 `max_completion_tokens` 当前仅校验格式，App Server 没有等价的逐请求输出长度限制映射，不能依赖它们强制截断生成。对不支持且会改变行为的选项明确返回 400，不默默吞掉参数。支持 `tool_choice=auto/none`、`response_format=json_object/json_schema`（映射到 App Server 的 `outputSchema`），并将 `reasoning_effort`、`reasoning.effort` 或 `thinking.type` 的合法思考档位映射到当前 Codex turn 的 `effort`。不同模型可用档位不同，以 `/v1/models` 及 Codex 实际模型目录为准，不支持的预算型 `thinking` 参数会明确报错；`stream_options.include_usage` 仅在 App Server 实际报告 token 数量时返回用量。带图片的真实模型验收仍是上线前置条件；如果前端只发远程图片 URL，应先在客户端转为内联图片，或者临时切回已支持远程图片的上游。
 
 动态工具是 Codex App Server 实验接口。升级 Codex CLI 后应先用无副作用的合成工具测试普通回复、流式回复、工具调用和工具结果续轮，再更新生产 Runner。
 
