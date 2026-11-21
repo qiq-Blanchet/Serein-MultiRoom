@@ -245,7 +245,11 @@ def routes(settings, services, auth):
             recall_state = 'disabled' if not use_memory else 'replayed'
         else:
             stable = activity = recalled = ''
-            messages = remove_images_for_eyes(incoming) if state['features'].get('image_eyes') else incoming
+            # Preserve native vision for Codex even when Serein Eyes is enabled.
+            # Eyes may still generate a transcript, but must not replace an image
+            # that the selected ChatGPT-plan model can read directly.
+            strip_for_eyes = state['features'].get('image_eyes') and model.get('protocol') != 'codex'
+            messages = remove_images_for_eyes(incoming) if strip_for_eyes else incoming
             retained_anchor = ''
             if resume_query is None and command_resume:
                 resume_snapshot = await asyncio.to_thread(chat_resume.retained, services, window_id, incoming, context)
