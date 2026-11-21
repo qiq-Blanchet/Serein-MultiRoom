@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
 
 
 def get_json(url: str, token: str) -> dict:
@@ -154,9 +155,11 @@ def main() -> int:
                         help="Model returned by the authenticated runner")
     parser.add_argument("--image", type=Path, help="Optional local test image")
     args = parser.parse_args()
-    if not args.base.startswith(("http://127.0.0.1:", "http://localhost:",
-                                 "http://[::1]:")):
-        raise ValueError("This smoke test only connects to loopback Runner endpoints")
+    url = urlsplit(args.base)
+    if (url.scheme != "http" or url.hostname not in ("127.0.0.1", "::1", "localhost")
+            or url.username or url.password or url.query or url.fragment
+            or not url.port or url.path not in ("", "/", "/v1", "/v1/")):
+        raise ValueError("This smoke test only connects to a loopback Runner /v1 endpoint")
     token = os.environ.get("SEREIN_CODEX_RUNNER_TOKEN", "")
     if not token:
         raise ValueError("Set SEREIN_CODEX_RUNNER_TOKEN in this process environment")
