@@ -183,8 +183,15 @@ def prepare_messages(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], str
             call_id = str(message.get("tool_call_id") or "").strip()
             if not call_id:
                 raise ValueError("Tool messages need tool_call_id")
+            images = _image_urls(message.get("content"))
+            if images:
+                content_items = ([{"type":"input_text", "text":text}] if text else [])
+                content_items.extend({"type":"input_image", "image_url":url} for url in images)
+                output = content_items
+            else:
+                output = text or "Tool returned no text."
             items.append({"type":"function_call_output", "call_id":call_id,
-                          "output":text or "Tool returned no text."})
+                          "output":output})
             continue
         else:
             raise ValueError(f"Unsupported chat role for Codex runner: {role}")
@@ -249,7 +256,10 @@ class CodexAppServer:
         if self.process is None or self.process.stdin is None:
             raise CodexRunnerError("Codex App Server stdin is unavailable")
         self.process.stdin.write((json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n").encode())
-        await asyncio.wait_for(self.process.stdin.drain(), timeout=self.config.timeout_seconds)
+        remaining = self.config.timeout_seconds
+        if self.deadline is not None:
+            remaining = max(0.001, min(remaining, self.deadline - time.monotonic()))
+        await asyncio.wait_for(self.process.stdin.drain(), timeout=remaining)
 
     async def _read(self) -> dict[str, Any]:
         if self.process is None or self.process.stdout is None:
@@ -282,7 +292,10 @@ class CodexAppServer:
                 result = message.get("result")
                 return result if isinstance(result, dict) else {}
             if message.get("id") is not None and message.get("method"):
-                raise CodexRunnerError("Codex requested an unsupported interactive tool or approval")
+                # Turn notifications can race the turn/start response. Buffer an
+                # early client-owned tool request for the event loop to process.
+                if method != "turn/start" or message["method"] != "item/tool/call":
+                    raise CodexRunnerError("Codex requested an unsupported interactive tool or approval")
             self.backlog.append(message)
 
     @staticmethod
