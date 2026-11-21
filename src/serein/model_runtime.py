@@ -151,7 +151,9 @@ def normalize_response(model, result):
 
 async def complete(model, payload, *, window_id=''):
     url, headers, body = request_for(model, {**payload, 'stream':False}, window_id=window_id)
-    # Codex runner allows up to 1800s per turn; the proxy must outlive that bound.\n    default_timeout = 1830 if model.get('protocol') == 'codex' else 120\n    timeout=httpx.Timeout(model.get('request_timeout_seconds',default_timeout),connect=15,pool=15)
+    # Codex runner allows up to 1800s per turn; the proxy must outlive that bound.
+    default_timeout = 1830 if model.get('protocol') == 'codex' else 120
+    timeout=httpx.Timeout(model.get('request_timeout_seconds',default_timeout),connect=15,pool=15)
     started=monotonic()
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
