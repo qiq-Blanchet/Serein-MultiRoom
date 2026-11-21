@@ -92,9 +92,9 @@ Serein 只能读到已进入实例的资料。聊天客户端接上 MCP，并不
 
 如果聊天已经由你自己的服务或 Agent 驱动，可以让宿主在**新的用户轮**调用 `POST /api/hook/recall`，把返回的 `additional_context` 放进实际发送给模型的消息。它返回 `recalled_ids`，但同时标记 `injected: false`：查到材料不等于已经交给模型。工具续轮沿用本轮上下文，不重复查找。
 
-一键安装的实例地址可直接用 Gateway Key（`Authorization: Bearer <Gateway Key>`）访问这个 Hook 接口。主示例由宿主持久保存**实际交付**记录，并传同一窗口最近五次成功交付的 ID 做冷却；这条接法不读写 Serein 的 `/v1/host/deliveries`。也可单独选择服务端历史方式，完整成功后再调用该接口登记，两种方式不要同时用于同一轮。失败、中断或仅准备了材料都不登记。每个会话保持稳定的窗口 ID。Hook 不负责调用聊天模型，也不会自动归档宿主的对话。
+一键安装的实例地址可直接用 Gateway Key（`Authorization: Bearer <Gateway Key>`）访问这个 Hook 接口。主示例由宿主持久保存**实际交付**记录，并传同一窗口最近五次成功交付的 ID 做冷却；这条接法不读写 Serein 的 `/v1/host/deliveries`。也可单独选择服务端历史方式，完整成功后再调用该接口登记，两种方式不要同时用于同一轮。失败、中断或仅准备了材料都不登记。每个会话保持稳定的窗口 ID。通用 Hook 不负责调用聊天模型；能证明完整成功并同时提供用户与助手正文的受信宿主，可使用 `/v1/host/turns` 归档当前轮。
 
-可直接参考 [Python Hook 宿主示例](examples/hook_host.py) 和 [接入步骤、请求格式](docs/hook-integration.md)。只连接 MCP 的客户端仍需主动调用工具；需要 Serein 自动完成模型调用与注入时，使用上面的聊天网关。
+可直接参考 [Python Hook 宿主示例](examples/hook_host.py) 和 [接入步骤、请求格式](docs/hook-integration.md)。使用 Codex CLI 登录态作为第三方客户端聊天上游时，见 [Codex 登录态聊天网关](docs/codex-chat-runner.md)。只连接 MCP 的客户端仍需主动调用工具；需要 Serein 自动完成模型调用与注入时，使用上面的聊天网关。
 
 ## 召回的是什么格式
 

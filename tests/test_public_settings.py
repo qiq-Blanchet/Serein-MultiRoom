@@ -608,6 +608,16 @@ def test_native_task_options_and_cache_validation(deployment):
     assert deepseek_anthropic['reasoning']=={'effort':'none'}
     with pytest.raises(ValueError):ModelEntry(**model,prompt_cache='openai')
     with pytest.raises(ValueError):ModelEntry(**model,prompt_cache='anthropic',prompt_cache_retention='24h')
+    codex = ModelEntry(id='codex', label='Codex', model='synthetic-codex',
+        base_url='http://127.0.0.1:4501/v1', protocol='codex')
+    assert codex.protocol == 'codex'
+    with pytest.raises(ValueError, match='manages its own conversation cache'):
+        ModelEntry(**{**codex.model_dump(), 'prompt_cache':'openai'})
+    url, headers, body = request_for(codex.model_dump(),
+        {'messages':[{'role':'user','content':'hello'}]}, window_id='work-window')
+    assert url == 'http://127.0.0.1:4501/v1/chat/completions'
+    assert headers['X-Serein-Window-ID'] == 'work-window'
+    assert body['model'] == 'synthetic-codex' and 'prompt_cache_key' not in body
 
 
 def test_deepseek_tool_requests_fill_only_missing_reasoning_content_without_mutating_input():

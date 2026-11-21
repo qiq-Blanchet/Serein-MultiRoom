@@ -21,19 +21,20 @@ export function UpstreamSettings({upstreams,modelIds=[],assignments={},onChange,
     <div className="configured-models">{upstreams.map(upstream=><details className="configured-model" key={upstream.id}>
       <summary>{upstream.name || "新上游"}<small>{upstream.models.length} 个模型</small></summary>
       <label className="settings-field"><span>上游名称</span><input required value={upstream.name} onChange={event=>edit(upstream.id,{name:event.target.value})} /></label>
-      <label className="settings-field"><span>API Base URL</span><input required type="url" placeholder="https://api.example.com/v1" value={upstream.base_url} onChange={event=>edit(upstream.id,{base_url:event.target.value})} /></label>
-      <label className="settings-field"><span>API Key</span><input type="password" autoComplete="new-password" value={upstream.api_key || ""}
+      <label className="settings-field"><span>{upstream.protocol==="codex"?"Runner Base URL":"API Base URL"}</span><input required type="url" placeholder={upstream.protocol==="codex"?"http://codex-runner:4501/v1":"https://api.example.com/v1"} value={upstream.base_url} onChange={event=>edit(upstream.id,{base_url:event.target.value})} /></label>
+      <label className="settings-field"><span>{upstream.protocol==="codex"?"Runner Token":"API Key"}</span><input type="password" autoComplete="new-password" value={upstream.api_key || ""}
         data-upstream-api-key data-upstream-id={upstream.id}
         placeholder={upstream.api_key_configured?"已配置；留空保留":"本地无认证上游可留空"}
         onChange={event=>edit(upstream.id,{api_key:event.target.value,...(event.target.value?{clear_key:false}:{})})} /></label>
       {upstream.api_key_configured && <label className="settings-toggle"><span>删除已保存的密钥</span><input type="checkbox" role="switch" checked={upstream.clear_key || false} onChange={event=>edit(upstream.id,{clear_key:event.target.checked})} /></label>}
       <label className="settings-field"><span>接口格式</span><select value={upstream.protocol} onChange={event=>edit(upstream.id,{protocol:event.target.value,prompt_cache:"",prompt_cache_retention:""})}>
-        <option value="openai">Chat Completions / Embeddings / Rerank</option><option value="anthropic">Anthropic Messages</option></select></label>
+        <option value="openai">Chat Completions / Embeddings / Rerank</option><option value="anthropic">Anthropic Messages</option><option value="codex">Codex App Server Runner</option></select></label>
+      {upstream.protocol==="codex"&&<p className="model-connection-help">仅作为聊天上游。Runner 在独立低权限环境中持有 Codex 登录，不把登录凭据保存到 Serein。</p>}
       <details><summary>缓存与连接选项</summary>
         <label className="settings-field"><span>密钥环境变量（可选）</span><input value={upstream.api_key_env || ""} onChange={event=>edit(upstream.id,{api_key_env:event.target.value})} /></label>
-        <label className="settings-field"><span>提示缓存</span><select value={upstream.prompt_cache || ""} onChange={event=>edit(upstream.id,{prompt_cache:event.target.value,prompt_cache_retention:""})}>
+        <label className="settings-field"><span>提示缓存</span><select disabled={upstream.protocol==="codex"} value={upstream.prompt_cache || ""} onChange={event=>edit(upstream.id,{prompt_cache:event.target.value,prompt_cache_retention:""})}>
           <option value="">跟随服务商默认值</option>{upstream.protocol==="openai" && <option value="openai">Prompt cache key</option>}<option value="anthropic">Anthropic 自动缓存</option>{upstream.protocol==="anthropic" && <option value="anthropic-explicit">Anthropic 明确断点</option>}</select></label>
-        <label className="settings-field"><span>缓存时长</span><select value={upstream.prompt_cache_retention || ""} onChange={event=>edit(upstream.id,{prompt_cache_retention:event.target.value})}>
+        <label className="settings-field"><span>缓存时长</span><select disabled={upstream.protocol==="codex"} value={upstream.prompt_cache_retention || ""} onChange={event=>edit(upstream.id,{prompt_cache_retention:event.target.value})}>
           <option value="">默认</option>{upstream.prompt_cache==="openai"?<><option value="in-memory">in-memory</option><option value="24h">24 小时</option></>:upstream.prompt_cache?<><option value="5m">5 分钟</option><option value="1h">1 小时</option></>:null}</select></label>
         <label className="settings-field"><span>默认模型名（仅单上游时使用）</span><input value={upstream.default_model || ""} onChange={event=>edit(upstream.id,{default_model:event.target.value})} /></label>
       </details>

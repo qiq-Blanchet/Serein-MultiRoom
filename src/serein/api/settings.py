@@ -47,7 +47,7 @@ class ModelConnection(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
     base_url: str = Field(min_length=1, max_length=2000)
     api_key: str | None = Field(default=None, max_length=4000)
-    protocol: Literal['openai', 'anthropic'] = 'openai'
+    protocol: Literal['openai', 'anthropic', 'codex'] = 'openai'
     prompt_cache: Literal['', 'openai', 'anthropic', 'anthropic-explicit'] = ''
     prompt_cache_retention: Literal['', 'in-memory', '24h', '5m', '1h'] = ''
     _endpoint = field_validator('base_url')(api_base)
@@ -59,6 +59,8 @@ class ModelConnection(BaseModel):
 
     @model_validator(mode='after')
     def cache_options(self):
+        if self.protocol == 'codex' and (self.prompt_cache or self.prompt_cache_retention):
+            raise ValueError('Codex App Server manages its own conversation cache')
         if self.protocol == 'openai' and self.prompt_cache == 'anthropic-explicit':
             raise ValueError('Explicit Anthropic cache breakpoints require the Messages format')
         if self.protocol == 'anthropic' and self.prompt_cache == 'openai':
@@ -134,7 +136,7 @@ class ModelDiscoveryRequest(BaseModel):
     base_url: str = Field(min_length=1, max_length=2000)
     api_key: str | None = Field(default=None, max_length=4000, pattern=r'^[^\r\n]*$')
     clear_key: bool = False
-    protocol: Literal['openai', 'anthropic'] = 'openai'
+    protocol: Literal['openai', 'anthropic', 'codex'] = 'openai'
     _endpoint = field_validator('base_url')(api_base)
 
 

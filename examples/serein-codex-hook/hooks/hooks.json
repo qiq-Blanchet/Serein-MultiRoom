@@ -1,0 +1,44 @@
+{
+  "description": "Opt-in Serein recall and completed-turn archiving.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/scripts/serein_hook.py\" user",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\serein_hook.py\" user",
+            "timeout": 15,
+            "statusMessage": "Checking Serein memory",
+            "additionalContextLimit": 2500
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/scripts/serein_hook.py\" stop",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\serein_hook.py\" stop",
+            "timeout": 15,
+            "statusMessage": "Archiving the completed turn to Serein"
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/scripts/serein_hook.py\" interrupt",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\serein_hook.py\" interrupt",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

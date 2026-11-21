@@ -72,4 +72,6 @@ Passage 的原文位置覆盖、Embedding 的字符预算、Reranker 的字符�
 
 接入自托管 Embedding / Reranker 时，应核对模型的实际 token 上限及服务端截断行为，连同标题、instruction、查询和特殊 token 一起检查真实输入。这里不提供尚未实现的 tokenizer 配置参数。需要按 token 分段并重排原文命中片段的支持仍待补齐，不能用“字符覆盖完整”作为模型输入完整的证明。Hook 输出另受 `max_chars`（每卡正文）和 `max_context_chars`（总上下文）的字符限制；它们也不控制 Embedding / Reranker 的 token 窗口。
 
-Hook 只返回记忆候选和上下文，**不代替聊天网关调用模型，也不会自动归档宿主对话**。想让这些聊天进入原话档案并参与 Event 整理，还需通过[对话导入](file-imports.md)等独立途径提供用户与助手消息；本示例不代替原话接入。仅连接 MCP 也不会自动完成上述流程。
+通用 Hook 只返回记忆候选和上下文，**不代替聊天网关调用模型**。上面的最小宿主示例也仍只登记交付，不自动归档宿主对话。
+
+能够在完整成功后同时提供原始用户消息与最终助手正文的受信宿主，可改为 `POST /v1/host/turns`：请求带稳定且幂等的 `receipt_id`、`window_id`、`user_message`、`assistant_message`、实际交付的 `delivered_ids` 和客户端名称。该入口把两条原话归档并登记同一 receipt；失败或中断轮次不得调用，receipt 换内容会被拒绝。归档材料会参加现有 Event 整理，不代表已经生成摘要。具体实现见 [Codex 本地 Hook 示例与登录态网关](codex-chat-runner.md)。不能提供上述成功边界的宿主仍需通过[对话导入](file-imports.md)等独立途径接入原话。仅连接 MCP 不会自动完成上述流程。

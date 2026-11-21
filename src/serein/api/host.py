@@ -1,8 +1,9 @@
 """Host-owned delivery acknowledgements and archive-backed evidence selection."""
 import json
 from fastapi import APIRouter, HTTPException, Query
-from ..core.store import Store, encode, Conflict
+from ..core.store import Store, encode, digest, Conflict
 from ..compat.raw_archive import raw_archive
+from ..chat_archive import archive_host_turn
 
 
 def routes(settings, auth):
@@ -10,6 +11,16 @@ def routes(settings, auth):
     with Store(settings.database) as store:
         store.conn.execute('CREATE TABLE IF NOT EXISTS host_deliveries '
             '(id INTEGER PRIMARY KEY, receipt_id TEXT UNIQUE NOT NULL, payload TEXT NOT NULL)')
+        store.conn.execute('CREATE TABLE IF NOT EXISTS host_turn_receipts '
+            '(receipt_id TEXT PRIMARY KEY, window_id TEXT NOT NULL, payload_hash TEXT NOT NULL)')
+
+    def record_delivery(body):
+        payload=encode({k:body[k] for k in ('receipt_id','window_id','delivered_ids')})
+        with Store(settings.database) as store,store.transaction():
+            old=store.conn.execute('SELECT * FROM host_deliveries WHERE receipt_id=?',(body['receipt_id'],)).fetchone()
+            if old and old['payload']!=payload:
+                raise Conflict('Delivery receipt already records a different acknowledgement')
+            store.conn.execute('INSERT OR IGNORE INTO host_deliveries(receipt_id,payload) VALUES (?,?)',(body['receipt_id'],payload))
 
     @router.post('/v1/host/deliveries')
     def delivered(body:dict):
@@ -17,13 +28,40 @@ def routes(settings, auth):
             raise HTTPException(400,'receipt_id, window_id and actually delivered_ids are required')
         if len(body['delivered_ids'])>500 or any(not isinstance(k,str) for k in body['delivered_ids']):
             raise HTTPException(400,'Invalid delivery IDs')
-        payload=encode({k:body[k] for k in ('receipt_id','window_id','delivered_ids')})
-        with Store(settings.database) as store,store.transaction():
-            old=store.conn.execute('SELECT * FROM host_deliveries WHERE receipt_id=?',(body['receipt_id'],)).fetchone()
-            if old and old['payload']!=payload:
-                raise Conflict('Delivery receipt already records a different acknowledgement')
-            store.conn.execute('INSERT OR IGNORE INTO host_deliveries(receipt_id,payload) VALUES (?,?)',(body['receipt_id'],payload))
+        record_delivery(body)
         return {'status':'recorded','reported_by':'host','delivered_ids':body['delivered_ids']}
+
+    @router.post('/v1/host/turns')
+    def completed_turn(body:dict):
+        receipt_id=str(body.get('receipt_id') or '').strip()
+        window_id=str(body.get('window_id') or '').strip()
+        user_message=body.get('user_message')
+        assistant_message=body.get('assistant_message')
+        delivered_ids=body.get('delivered_ids',[])
+        client=str(body.get('client') or 'chatgpt_work').strip()
+        if not receipt_id or len(receipt_id)>300 or not window_id or len(window_id)>200:
+            raise HTTPException(400,'receipt_id and window_id are required')
+        if not isinstance(user_message,str) or not isinstance(assistant_message,str):
+            raise HTTPException(400,'user_message and assistant_message must be text')
+        if not user_message.strip() or not assistant_message.strip() or len(user_message)>120000 or len(assistant_message)>120000:
+            raise HTTPException(400,'Completed host turn text is empty or too large')
+        if not isinstance(delivered_ids,list) or len(delivered_ids)>500 or any(not isinstance(k,str) for k in delivered_ids):
+            raise HTTPException(400,'delivered_ids must contain at most 500 IDs')
+        if not client or len(client)>100 or any(ord(ch)<32 for ch in client):
+            raise HTTPException(400,'Invalid host client name')
+        delivered_ids=list(dict.fromkeys(delivered_ids))
+        payload_hash=digest(encode([window_id,user_message,assistant_message,delivered_ids,client]))
+        with Store(settings.database) as store,store.transaction():
+            old=store.conn.execute('SELECT * FROM host_turn_receipts WHERE receipt_id=?',(receipt_id,)).fetchone()
+            if old and (old['window_id']!=window_id or old['payload_hash']!=payload_hash):
+                raise Conflict('Host turn receipt already records different content')
+            store.conn.execute('INSERT OR IGNORE INTO host_turn_receipts VALUES (?,?,?)',
+                (receipt_id,window_id,payload_hash))
+        archived=archive_host_turn(settings,receipt_id=receipt_id,window_id=window_id,
+            user_message=user_message,assistant_message=assistant_message,client=client)
+        record_delivery({'receipt_id':receipt_id,'window_id':window_id,'delivered_ids':delivered_ids})
+        return {'status':'recorded','reported_by':'host','delivered_ids':delivered_ids,
+                'raw_archive':archived,'pipeline_eligible':not bool(archived.get('rejected'))}
 
     @router.get('/v1/host/deliveries')
     def history(limit:int=Query(80,ge=1,le=200),before_id:int=0,

@@ -20,6 +20,7 @@ background = ["openai>=1.60,<3"]
 
 [project.scripts]
 serein = "serein.cli:main"
+serein-codex-runner = "serein.codex_runner:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -38,7 +38,7 @@
 密钥保存在实例数据库中，读取接口只返回“是否已配置”；留空保留密钥，显式勾选删除才清空。
 数据库和所有运行目录不进入源码发行包。模型列表不是浏览器 localStorage 配置。
 
-文本生成支持 Chat Completions 和 Anthropic Messages 上游，聊天客户端入口统一为 Chat Completions。
+文本生成支持 Chat Completions、Anthropic Messages，以及独立的 Codex App Server Runner 上游；聊天客户端入口统一为 Chat Completions。Codex Runner 使用当前系统用户已有的 Codex 登录态，不把登录凭据交给 Serein，部署与协议限制见 [Codex 登录态聊天网关](codex-chat-runner.md)。
 Embedding 使用 `/embeddings`，Reranker 使用 `/rerank`；选择相应用途的模型。
 更换 embedding 后，先保存，再点击“建立 / 补齐检索索引”。它会探测维度，生成完整公开路由例句和正文（开启长文分段时还包括 passages）
 向量，同时建立实体与 Arc 范围索引，为新模型创建独立可重建索引。成功后再开启“聊天时自动带入记忆”。

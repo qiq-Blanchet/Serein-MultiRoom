@@ -118,6 +118,11 @@ def request_for(model, payload, *, window_id=''):
         if model.get('anthropic_beta'):
             headers['anthropic-beta'] = model['anthropic_beta']
         return model['base_url'] + '/messages', headers, converted
+    if model.get('protocol') == 'codex':
+        headers = {'Authorization': 'Bearer ' + model['api_key']} if model.get('api_key') else {}
+        if window_id:
+            headers['X-Serein-Window-ID'] = window_id
+        return model['base_url'] + '/chat/completions', headers, payload
     if model.get('prompt_cache') == 'openai' and window_id:
         payload.setdefault('prompt_cache_key', window_id)
         if model.get('prompt_cache_retention'):

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "serein-codex-memory",
+  "version": "0.1.0",
+  "description": "Opt-in Serein recall and completed-turn archiving for local Codex chats.",
+  "license": "MIT",
+  "extensions": {
+    "com.openai": {
+      "hooks": "./hooks/hooks.json",
+      "interface": {
+        "displayName": "Serein Memory",
+        "shortDescription": "Recall and archive Serein memory in local Codex chats",
+        "developerName": "Serein",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"]
+      }
+    }
+  }
+}

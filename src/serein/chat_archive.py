@@ -93,3 +93,25 @@ def archive_turn(settings, turn, message):
     return {'status': 'rejected' if result['rejected'] else 'recorded',
             'inserted': result['inserted'], 'duplicate': result['duplicate'],
             'rejected': result['rejected'], 'message_ids': [item['id'] for item in result['items'] if item.get('id')]}
+
+
+def archive_host_turn(settings, *, receipt_id, window_id, user_message, assistant_message,
+                      client='chatgpt_work'):
+    """Archive one completed host turn without retaining injected Hook context."""
+    user = original({'role': 'user', 'content': user_message})
+    assistant = original({'role': 'assistant', 'content': assistant_message})
+    if not user['text'] or not assistant['text']:
+        raise ValueError('Completed host turns need non-empty user and assistant text')
+    stamp = now()
+    events = []
+    for item, suffix in ((user, 'user'), (assistant, 'assistant')):
+        events.append({'source': 'serein_host', 'source_event_id': f'{receipt_id}:{suffix}',
+            'role': item['role'], 'text': item['text'], 'created_at': stamp,
+            'session_id': window_id, 'conversation_id': window_id, 'client': client,
+            'metadata': {'archive_version': 1, 'timestamp_source': 'host_turn_completed',
+                         'attachments': item['attachments'], 'host_receipt_id': receipt_id}})
+    result = raw_archive(settings).ingest(events, source='serein_host')
+    return {'status': 'rejected' if result['rejected'] else 'recorded',
+            'inserted': result['inserted'], 'duplicate': result['duplicate'],
+            'rejected': result['rejected'],
+            'message_ids': [item['id'] for item in result['items'] if item.get('id')]}
