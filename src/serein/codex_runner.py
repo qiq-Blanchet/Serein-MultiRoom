@@ -88,6 +88,13 @@ def completion_options(payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"Codex runner does not support non-default {key}")
     if type(payload.get("n", 1)) is not int or payload.get("n", 1) != 1:
         raise ValueError("Codex runner only supports n=1")
+    for key in ("max_tokens", "max_completion_tokens"):
+        value = payload.get(key)
+        if value is not None and (type(value) is not int or value < 1):
+            raise ValueError(f"{key} must be a positive integer")
+    if (payload.get("max_tokens") is not None and payload.get("max_completion_tokens") is not None
+            and payload["max_tokens"] != payload["max_completion_tokens"]):
+        raise ValueError("Conflicting max_tokens and max_completion_tokens values")
     if payload.get("stop") not in (None, [], ""):
         raise ValueError("Codex runner does not support custom stop sequences")
     choice = payload.get("tool_choice", "auto")
@@ -373,7 +380,9 @@ class CodexAppServer:
                         item_id = str(params.get("itemId") or "")
                         phase = str(params.get("phase") or phases.get(item_id) or "")
                         delta = params.get("delta")
-                        if isinstance(delta, str) and phase not in ("commentary",):
+                        # Only publish the final answer, not commentary or other
+                        # intermediate agent messages that are not user-facing.
+                        if isinstance(delta, str) and phase in ("", "final_answer"):
                             streamed += delta
                             yield {"type":"delta", "text":delta}
                     elif method == "item/completed":
@@ -390,7 +399,7 @@ class CodexAppServer:
                             raise CodexRunnerError(str(detail or f"Codex turn {finished.get('status') or 'failed'}"))
                         break
                 preferred = [text for phase, text in completed_messages if phase == "final_answer"]
-                fallback = [text for phase, text in completed_messages if phase != "commentary"]
+                fallback = [text for phase, text in completed_messages if phase in ("", "final_answer")]
                 final = (preferred or fallback or [streamed])[-1].strip()
                 if not final:
                     raise CodexRunnerError("Codex returned no final answer")
