@@ -346,3 +346,22 @@ def test_image_in_client_tool_continuation_is_not_sent_twice(tmp_path):
         "text": ("Continue the existing user turn using the supplied function results. Return the final "
                  "answer, or call another client-provided function if needed."),
     }]
+
+
+def test_codex_does_not_forward_tool_calls_from_a_different_turn(tmp_path):
+    class WrongTurnAppServer(ScriptedAppServer):
+        async def _request(self, method, params):
+            result = await super()._request(method, params)
+            if method == "turn/start":
+                self.notifications[0]["params"]["turnId"] = "another-turn"
+            return result
+
+    server = WrongTurnAppServer(tmp_path, emit_tool=True)
+    with TestClient(create_runner_app(server.config, server)) as client:
+        resp = client.post("/v1/chat/completions", headers=HEADERS, json={
+            "model": "test-codex",
+            "messages": [{"role": "user", "content": "Run lookup"}],
+            "tools": [{"type": "function", "function": {
+                "name": "lookup", "parameters": {"type": "object"}}}]})
+        assert resp.status_code == 502
+    assert server.process is None
