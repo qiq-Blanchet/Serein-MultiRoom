@@ -156,7 +156,7 @@ def test_codex_async_transcription_queues_for_summary_without_removing_native_im
         {'type': 'text', 'text': 'Describe the picture directly.'},
         {'type': 'image_url', 'image_url': {'url': PNG}}]}]
     response = client.post('/v1/chat/completions', json={
-        'model': 'synthetic-vision', 'messages': messages, 'stream': stream,
+        'messages': messages, 'stream': stream,
         'serein': {'memory': False, 'window_id': 'synthetic-codex-async'}})
     assert response.status_code == 200, response.text
     assert len(seen) == 1
