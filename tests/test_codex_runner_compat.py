@@ -111,7 +111,7 @@ def test_dynamic_tool_call_stays_on_client_side(tmp_path):
     payload = {"model": "test-codex",
         "messages": [{"role": "user", "content": "Find a memory"}],
         "tools": [{"type": "function", "function": {
-            "name": "lookup", "parameters": {"type": "object"}}]}
+            "name": "lookup", "parameters": {"type": "object"}}}]}
     }
     with TestClient(create_runner_app(server.config, server)) as client:
         resp = client.post("/v1/chat/completions", headers=HEADERS, json=payload)
