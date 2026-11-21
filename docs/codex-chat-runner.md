@@ -20,7 +20,7 @@
 
 Runner 必须与 Serein 同机或位于受保护的私网。不要把 Runner 的 4501 端口暴露到公网；它的 Bearer Token 只是 Serein 到 Runner 的内部凭据。若以后使用 `gptmemory.你的域名`，域名、HTTPS 证书和 Cloudflare 只反代 Serein 网关，Runner 保持回环地址或容器私网地址。
 
-每个 Chat Completions 请求创建临时 Codex 线程，并把客户端提供的历史重新注入。Runner 使用 `approvalPolicy: never`、只读且限制读取根目录的 sandbox，并给模型加入“只作为聊天模型”的 developer 约束。仍应给 Runner 使用单独的低权限系统用户和空的隔离工作目录；不要让该目录包含源码、密钥或私人文件。
+每个 Chat Completions 请求创建临时 Codex 线程，并把客户端提供的历史重新注入。Runner 使用 `approvalPolicy: never`、`readOnly` 且关闭网络访问的 sandbox，并给模型加入“只作为聊天模型”的 developer 约束。当前 App Server 的 `readOnly` 协议没有“只允许读取某个根目录”的字段；它限制写入，但不是主机文件读取隔离边界。因此必须给 Runner 使用单独的低权限系统用户（或独立容器）和空的隔离工作目录，并通过操作系统权限确保该身份无法读取源码、密钥或私人文件。developer 约束只用于引导模型，不能替代权限隔离。
 
 ## 安装 Runner
 

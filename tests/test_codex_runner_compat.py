@@ -4,7 +4,6 @@ The scripted app-server exercises the actual JSON-RPC envelope and response adap
 An authenticated real-app-server smoke test is still required before production.
 """
 import asyncio
-import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -24,8 +23,8 @@ IMAGE = "data:image/png;base64,iVBORw0KGgo="
 
 
 class ScriptedAppServer(CodexAppServer):
-    def __init__(self, workdir, *, emit_tool=False):
-        super().__init__(RunnerConfig("codex", Path(workdir), "runner-secret"))
+    def __init__(self, workdir, *, emit_tool=False, timeout_seconds=240):
+        super().__init__(RunnerConfig("codex", Path(workdir), "runner-secret", timeout_seconds))
         self.calls = []
         self.emit_tool = emit_tool
         self.notifications = []
@@ -84,7 +83,46 @@ def test_preserves_image_in_current_user_message_and_history(tmp_path):
     turn = next(params for method, params in server.calls if method == "turn/start")
     assert turn["input"] == [{"type": "text", "text": "What is this?"},
                              {"type": "image", "url": IMAGE}]
+    assert turn["sandboxPolicy"] == {"type": "readOnly", "networkAccess": False}
     assert events[-1] == {"type": "completed", "text": "A test reply"}
+
+
+def test_serialized_queue_wait_is_part_of_the_request_deadline(tmp_path):
+    server = ScriptedAppServer(tmp_path, timeout_seconds=0.03)
+    payload = {"model": "test-codex", "messages": [
+        {"role": "user", "content": "Hello"}]}
+
+    async def exercise():
+        await server.lock.acquire()
+        try:
+            task = asyncio.create_task(_consume(server, payload))
+            done, _ = await asyncio.wait({task}, timeout=0.2)
+            assert task in done
+            with pytest.raises(asyncio.TimeoutError):
+                await task
+        finally:
+            server.lock.release()
+        assert server.calls == []
+
+    asyncio.run(exercise())
+
+
+def test_model_catalog_queue_wait_is_bounded_too(tmp_path):
+    server = ScriptedAppServer(tmp_path, timeout_seconds=0.03)
+
+    async def exercise():
+        await server.lock.acquire()
+        try:
+            task = asyncio.create_task(server.models())
+            done, _ = await asyncio.wait({task}, timeout=0.2)
+            assert task in done
+            with pytest.raises(asyncio.TimeoutError):
+                await task
+        finally:
+            server.lock.release()
+        assert server.calls == []
+
+    asyncio.run(exercise())
 
 
 def test_image_only_message_works_and_remote_url_is_rejected(tmp_path):
@@ -280,6 +318,30 @@ def test_client_tool_result_can_carry_text_and_inline_image():
     assert output["output"] == [
         {"type": "input_text", "text": "Tool produced a diagram"},
         {"type": "input_image", "image_url": IMAGE},
+    ]
+    assert prompt.startswith("Continue")
+
+
+def test_consecutive_client_tool_roundtrips_keep_call_ids_and_order():
+    payload = {"messages": [
+        {"role": "user", "content": "Use lookup twice"},
+        {"role": "assistant", "content": None, "tool_calls": [{
+            "id": "call-1", "type": "function", "function": {
+                "name": "lookup", "arguments": '{"step":1}'}}]},
+        {"role": "tool", "tool_call_id": "call-1", "content": "first result"},
+        {"role": "assistant", "content": None, "tool_calls": [{
+            "id": "call-2", "type": "function", "function": {
+                "name": "lookup", "arguments": '{"step":2}'}}]},
+        {"role": "tool", "tool_call_id": "call-2", "content": "second result"},
+    ]}
+    history, prompt = prepare_messages(payload)
+    calls = [(item["type"], item.get("call_id"), item.get("output"))
+             for item in history if item["type"] in ("function_call", "function_call_output")]
+    assert calls == [
+        ("function_call", "call-1", None),
+        ("function_call_output", "call-1", "first result"),
+        ("function_call", "call-2", None),
+        ("function_call_output", "call-2", "second result"),
     ]
     assert prompt.startswith("Continue")
 

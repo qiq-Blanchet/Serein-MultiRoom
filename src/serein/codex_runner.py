@@ -333,7 +333,15 @@ class CodexAppServer:
         return str(thread.get("id") or "") if isinstance(thread, dict) else ""
 
     async def models(self) -> list[str]:
-        async with self.lock:
+        request_deadline = time.monotonic() + self.config.timeout_seconds
+        lock_acquired = False
+        try:
+            await asyncio.wait_for(
+                self.lock.acquire(),
+                timeout=max(0.001, request_deadline - time.monotonic()),
+            )
+            lock_acquired = True
+            self.deadline = request_deadline
             try:
                 await self._start()
                 result = await self._request("model/list", {"limit":200, "includeHidden":False})
@@ -342,6 +350,11 @@ class CodexAppServer:
             except Exception:
                 await self.close()
                 raise
+            finally:
+                self.deadline = None
+        finally:
+            if lock_acquired:
+                self.lock.release()
 
     async def events(self, payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         controls = completion_options(payload)
@@ -349,9 +362,16 @@ class CodexAppServer:
         model = str(payload.get("model") or "").strip()
         if not model:
             raise ValueError("model is required")
-        async with self.lock:
+        request_deadline = time.monotonic() + self.config.timeout_seconds
+        lock_acquired = False
+        try:
+            await asyncio.wait_for(
+                self.lock.acquire(),
+                timeout=max(0.001, request_deadline - time.monotonic()),
+            )
+            lock_acquired = True
             thread_id = turn_id = ""
-            self.deadline = time.monotonic() + self.config.timeout_seconds
+            self.deadline = request_deadline
             try:
                 await self._start()
                 thread_params = {"model":model,
@@ -375,9 +395,8 @@ class CodexAppServer:
                     turn_input.extend({"type":"image", "url":url}
                                       for url in _image_urls(current.get("content")))
                 turn_params = {"threadId":thread_id, "input":turn_input, "model":model,
-                    "approvalPolicy":"never", "sandboxPolicy":{"type":"readOnly",
-                        "access":{"type":"restricted", "includePlatformDefaults":True,
-                                  "readableRoots":[str(self.config.workdir)]}}}
+                    "approvalPolicy":"never",
+                    "sandboxPolicy":{"type":"readOnly", "networkAccess":False}}
                 if controls["output_schema"] is not None:
                     turn_params["outputSchema"] = controls["output_schema"]
                 if controls["effort"] is not None:
@@ -462,6 +481,9 @@ class CodexAppServer:
                 raise
             finally:
                 self.deadline = None
+        finally:
+            if lock_acquired:
+                self.lock.release()
 
 
 def create_runner_app(config: RunnerConfig, server: CodexAppServer | None = None) -> FastAPI:
