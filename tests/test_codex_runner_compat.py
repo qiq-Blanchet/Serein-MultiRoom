@@ -365,3 +365,37 @@ def test_codex_does_not_forward_tool_calls_from_a_different_turn(tmp_path):
                 "name": "lookup", "parameters": {"type": "object"}}}]})
         assert resp.status_code == 502
     assert server.process is None
+
+
+@pytest.mark.parametrize("control", [
+    {"reasoning_effort": "high"},
+    {"reasoning": {"effort": "high"}},
+    {"thinking": {"type": "high"}},
+])
+def test_client_reasoning_effort_reaches_codex_turn_start(tmp_path, control):
+    server = ScriptedAppServer(tmp_path)
+    asyncio.run(_consume(server, {
+        "model": "test-codex",
+        "messages": [{"role": "user", "content": "Explain briefly"}],
+        **control,
+    }))
+    turn = next(params for method, params in server.calls if method == "turn/start")
+    assert turn["effort"] == "high"
+
+
+@pytest.mark.parametrize("control", [
+    {"reasoning_effort": "unknown"},
+    {"reasoning": {"effort": "high", "summary": "detailed"}},
+    {"thinking": {"type": "enabled", "budget_tokens": 1024}},
+    {"thinking": {"type": "low"}, "reasoning_effort": "high"},
+])
+def test_unsupported_reasoning_settings_are_rejected_before_codex_runs(tmp_path, control):
+    server = ScriptedAppServer(tmp_path)
+    with TestClient(create_runner_app(server.config, server)) as client:
+        resp = client.post("/v1/chat/completions", headers=HEADERS, json={
+            "model": "test-codex",
+            "messages": [{"role": "user", "content": "Explain briefly"}],
+            **control,
+        })
+        assert resp.status_code == 400
+    assert server.calls == []
