@@ -54,6 +54,12 @@ Windows PowerShell 使用同名环境变量，然后运行 `serein-codex-runner`
 
 Codex 上游不使用 Serein 的 prompt cache 选项；线程与账户侧缓存由 Codex App Server 管理。其他 OpenAI／Anthropic 上游可同时保留，客户端会继续看到“上游名/模型名”，随时可以切回 API 上游。
 
+## 主模型看图与异步转录
+
+当 Serein 开启 **异步图片转录**（`image_transcription_async=true`），且未开启 Eyes（`image_eyes=false`）时，客户端提供的原图保留在主模型请求里，交给 Codex 原生视觉处理；Serein 同时把用户原话和图片引用归档并排入后台转录队列，供后续 Event／摘要使用。异步转录不是主模型的图像输入替身，转录失败也不应伪装成主模型看图失败。
+
+这与 Eyes 同步转录不同：Eyes 是另一种模式，适用于希望让 Serein 先转录、再给主模型提供文本材料的配置。两种模式互斥；不要为了使用 Codex 原生视觉而开启 Eyes。Runner 目前只支持 Base64 内联 `image_url`，不支持直接获取远程图片 URL。
+
 ## 第三方客户端与 MCP
 
 第三方客户端仍填写 Serein，而不是 Runner：
