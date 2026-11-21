@@ -450,7 +450,7 @@ class CodexAppServer:
                             raise CodexRunnerError(str(detail or f"Codex turn {finished.get('status') or 'failed'}"))
                         break
                 preferred = [text for phase, text in completed_messages if phase == "final_answer"]
-                fallback = [text for phase, text in completed_messages if phase in ("", "final_answer")]
+                fallback = [text for phase, text in completed_messages if phase in ("", "final_answer", "partial_answer")]
                 final = (preferred or fallback or [streamed])[-1].strip()
                 if not final:
                     raise CodexRunnerError("Codex returned no final answer")
