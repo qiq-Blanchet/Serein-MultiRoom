@@ -5,12 +5,15 @@ An authenticated real-app-server smoke test is still required before production.
 """
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 import pytest
 
 from serein.codex_runner import (
+    APP_SERVER_STDIO_LIMIT,
     CodexAppServer,
+    CodexRunnerError,
     RunnerConfig,
     completion_options,
     create_runner_app,
@@ -125,6 +128,40 @@ def test_model_catalog_queue_wait_is_bounded_too(tmp_path):
     asyncio.run(exercise())
 
 
+def test_app_server_stdio_limit_allows_inline_image_events(tmp_path, monkeypatch):
+    captured = {}
+
+    class StartOnlyServer(CodexAppServer):
+        async def _request(self, method, params):
+            return {}
+
+        async def _send(self, message):
+            return None
+
+    async def create_process(*args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=None)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    server = StartOnlyServer(RunnerConfig("codex", tmp_path, "runner-secret"))
+    asyncio.run(server._start())
+    assert captured["limit"] == APP_SERVER_STDIO_LIMIT
+    assert captured["limit"] > 20_000_000
+
+
+def test_oversized_app_server_line_is_reported_as_upstream_failure(tmp_path):
+    async def exercise():
+        reader = asyncio.StreamReader(limit=32)
+        reader.feed_data(b'{"value":"' + (b"x" * 100) + b'"}\n')
+        reader.feed_eof()
+        server = CodexAppServer(RunnerConfig("codex", tmp_path, "runner-secret"))
+        server.process = SimpleNamespace(stdout=reader)
+        with pytest.raises(CodexRunnerError, match="stdio limit"):
+            await server._read()
+
+    asyncio.run(exercise())
+
+
 def test_image_only_message_works_and_remote_url_is_rejected(tmp_path):
     _, prompt = prepare_messages({"messages": [
         {"role": "user", "content": [{"type": "image_url",
@@ -203,6 +240,19 @@ def test_json_schema_forwarded_to_turn_start(tmp_path):
     asyncio.run(_consume(server, payload))
     params = next(params for method, params in server.calls if method == "turn/start")
     assert params["outputSchema"] == schema
+
+
+def test_json_object_uses_prompt_fallback_instead_of_invalid_empty_schema(tmp_path):
+    server = ScriptedAppServer(tmp_path)
+    asyncio.run(_consume(server, {"model":"test-codex", "messages":[
+        {"role":"user", "content":"Answer as JSON"}],
+        "response_format":{"type":"json_object"}}))
+    injected = next(params for method, params in server.calls
+                    if method == "thread/inject_items")["items"]
+    developer = injected[0]["content"][0]["text"]
+    assert "valid JSON object" in developer
+    turn = next(params for method, params in server.calls if method == "turn/start")
+    assert "outputSchema" not in turn
 
 
 async def _consume(server, payload):

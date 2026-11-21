@@ -133,10 +133,13 @@ async def transcribe_images(model, images, *, timeout_seconds=180):
 async def _transcribe_one(model, image, timeout_seconds):
     content = [{"type": "text", "text": PROMPT}]
     content.append({"type": "image_url", "image_url": {"url": image["url"]}})
+    payload = {"messages": [{"role": "user", "content": content}],
+               "response_format": {"type": "json_object"}}
+    if model.get("protocol") != "codex":
+        payload["temperature"] = 0
     response = await complete(
         {**model, "request_timeout_seconds": timeout_seconds},
-        {"messages": [{"role": "user", "content": content}],
-         "response_format": {"type": "json_object"}, "temperature": 0},
+        payload,
     )
     try:
         choice = response['choices'][0]
