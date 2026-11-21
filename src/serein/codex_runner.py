@@ -508,7 +508,7 @@ def create_runner_app(config: RunnerConfig, server: CodexAppServer | None = None
                     "model":body.get("model"), "choices":[{"index":0,"delta":{},
                         "finish_reason":"tool_calls" if tool_called else "stop"}]}
                 yield "data: " + json.dumps(finish, separators=(",", ":")) + "\n\n"
-                if body.get("stream_options", {}).get("include_usage") and final_usage is not None:
+                if (body.get("stream_options") or {}).get("include_usage") and final_usage is not None:
                     usage_chunk = {"id":identifier, "object":"chat.completion.chunk",
                         "created":created, "model":body.get("model"),
                         "choices":[], "usage":final_usage}
