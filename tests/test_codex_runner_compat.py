@@ -262,3 +262,63 @@ def test_invalid_or_conflicting_token_bounds_are_rejected(tmp_path, options):
             **options})
         assert response.status_code == 400
     assert not server.calls
+
+
+def test_client_tool_result_can_carry_text_and_inline_image():
+    images = [{"type": "image_url", "image_url": {"url": IMAGE}}]
+    payload = {"messages": [
+        {"role": "user", "content": "What does the tool show?"},
+        {"role": "assistant", "content": None, "tool_calls": [{
+            "id": "call-image", "type": "function", "function": {
+                "name": "inspect", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call-image", "content": [
+            {"type": "text", "text": "Tool produced a diagram"}, *images]},
+    ]}
+    history, prompt = prepare_messages(payload)
+    output = next(item for item in history if item["type"] == "function_call_output")
+    assert output["call_id"] == "call-image"
+    assert output["output"] == [
+        {"type": "input_text", "text": "Tool produced a diagram"},
+        {"type": "input_image", "image_url": IMAGE},
+    ]
+    assert prompt.startswith("Continue")
+
+
+def test_client_tool_result_with_remote_image_is_rejected():
+    with pytest.raises(ValueError, match="inline"):
+        prepare_messages({"messages": [
+            {"role": "user", "content": "Show tool image"},
+            {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "call-1", "type": "function", "function": {
+                    "name": "inspect", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call-1", "content": [{
+                "type": "image_url", "image_url": {"url": "https://remote.invalid/secret"}}]},
+        ]})
+
+
+def test_early_app_server_dynamic_tool_request_is_buffered():
+    class RacingAppServer(CodexAppServer):
+        def __init__(self, workdir):
+            super().__init__(RunnerConfig("codex", Path(workdir), "runner-secret"))
+            self.messages = [
+                {"id": 99, "method": "item/tool/call", "params": {
+                    "threadId": "thread-test", "turnId": "turn-test",
+                    "tool": "lookup", "callId": "call-early", "arguments": {}}},
+                {"id": "1", "result": {"turn": {"id": "turn-test"}}},
+            ]
+            self.sent = []
+
+        async def _send(self, message):
+            self.sent.append(message)
+
+        async def _read(self):
+            return self.messages.pop(0)
+
+    async def exercise():
+        server = RacingAppServer(".")
+        response = await server._request("turn/start", {"threadId": "thread-test", "input": []})
+        assert response["turn"]["id"] == "turn-test"
+        assert len(server.backlog) == 1
+        assert server.backlog[0]["params"]["callId"] == "call-early"
+        assert server.sent[0]["method"] == "turn/start"
+    asyncio.run(exercise())
