@@ -71,7 +71,7 @@ Codex 上游不使用 Serein 的 prompt cache 选项；线程与账户侧缓存�
 
 客户端发送的 OpenAI function tools 会映射为 Codex App Server 的实验性 `dynamicTools`。Codex 要调用工具时，Runner 返回标准 Chat Completions `tool_calls`；**客户端原有的 MCP／本地工具仍由客户端执行**，客户端再把 `role: tool` 结果续发，Runner 按原有对话历史继续生成。这里不需要把客户端的工具安装进 Codex 工作目录，也不允许 Codex 替客户端执行文件、命令或其他本地操作。
 
-当前每次模型响应只桥接一个工具调用，工具输出按文本处理。支持文字与 OpenAI Chat Completions 的 Base64 内联 `image_url`（当前消息和历史消息）；为避免 Runner 代客户端访问内部网络，暂不支持 HTTP(S) 图片 URL，也不支持音频／视频、多工具并行、旧 `functions` 字段以及所有的自定义响应选项。对不支持且会改变行为的选项明确返回 400，不默默吞掉参数。支持 `tool_choice=auto/none`，以及 `response_format=json_object/json_schema` 映射到 App Server 的 `outputSchema`；`stream_options.include_usage` 仅在 App Server 实际报告 token 数量时返回用量。带图片的真实模型验收仍是上线前置条件；如果前端只发远程图片 URL，应先在客户端转为内联图片，或者临时切回已支持远程图片的上游。
+当前每次模型响应只桥接一个工具调用，并要求 Codex 串行请求客户端工具；工具结果中的文字及 Base64 内联图片会继续传给模型。支持文字与 OpenAI Chat Completions 的 Base64 内联 `image_url`（当前消息、历史消息和客户端工具结果）；为避免 Runner 代客户端访问内部网络，暂不支持 HTTP(S) 图片 URL，也不支持音频／视频、多工具并行、旧 `functions` 字段以及所有的自定义响应选项。`max_tokens` 与 `max_completion_tokens` 当前仅校验格式，App Server 没有等价的逐请求输出长度限制映射，不能依赖它们强制截断生成。对不支持且会改变行为的选项明确返回 400，不默默吞掉参数。支持 `tool_choice=auto/none`，以及 `response_format=json_object/json_schema` 映射到 App Server 的 `outputSchema`；`stream_options.include_usage` 仅在 App Server 实际报告 token 数量时返回用量。带图片的真实模型验收仍是上线前置条件；如果前端只发远程图片 URL，应先在客户端转为内联图片，或者临时切回已支持远程图片的上游。
 
 动态工具是 Codex App Server 实验接口。升级 Codex CLI 后应先用无副作用的合成工具测试普通回复、流式回复、工具调用和工具结果续轮，再更新生产 Runner。
 
@@ -115,7 +115,7 @@ py -3 scripts/smoke_codex_runner.py --model <实际可用的模型ID> --image "C
 2. Serein 模型页能拉取并保存 Codex 模型。
 3. 第三方客户端用独立 `X-Serein-Window-ID` 完成普通和流式回复。
 4. 用无副作用的客户端 MCP 查询验证 `tool_calls → role: tool → 最终回答` 续轮，确认调用仍发生在客户端。
-5. 使用 Base64 内联 PNG/JPEG 图片验证原生视觉识别（包括开启 Serein Eyes 的情形），并确认原话档案仍保留图片引用。
+5. 保持 Serein Eyes 关闭、异步图片转录开启，使用 Base64 内联 PNG/JPEG 图片验证主模型原生视觉；同时确认原话档案保留图片引用，转录任务进入后台队列。
 6. 检查 Serein 原话中只有当前用户与最终助手正文，没有召回块和工具返回值。随后开启自动摘要的测试实例，确认原话进入待整理批次；再按现有流程检查 Agent／Writer 结果。
 
 域名和证书不是 Runner 代码的前置条件。先用回环／私网跑通上述六项，再把 Serein 的公开入口切到 `gptmemory.你的域名`，可以把网络变量与应用问题分开验证。
