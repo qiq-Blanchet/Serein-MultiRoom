@@ -170,3 +170,36 @@ def test_json_schema_forwarded_to_turn_start(tmp_path):
 
 async def _consume(server, payload):
     return [event async for event in server.events(payload)]
+
+class UsageAppServer(ScriptedAppServer):
+    async def _request(self, method, params):
+        result = await super()._request(method, params)
+        if method == "turn/start" and not self.emit_tool:
+            self.notifications.insert(0, {"method": "thread/tokenUsage/updated",
+                "params": {"threadId": "thread-test", "turnId": "turn-test",
+                    "tokenUsage": {"last": {"inputTokens": 120, "outputTokens": 34,
+                                            "cachedInputTokens": 12}}}})
+        return result
+
+
+def test_streaming_usage_chunk_contains_real_codex_counts(tmp_path):
+    server = UsageAppServer(tmp_path)
+    with TestClient(create_runner_app(server.config, server)) as client:
+        result = client.post("/v1/chat/completions", headers=HEADERS, json={
+            "model": "test-codex", "messages": [{"role": "user", "content": "Hello"}],
+            "stream": True, "stream_options": {"include_usage": True}})
+        assert result.status_code == 200
+        assert '"choices":[]' in result.text
+        assert '"prompt_tokens":120' in result.text
+        assert '"completion_tokens":34' in result.text
+        assert result.text.rstrip().endswith("data: [DONE]")
+
+
+def test_nonstream_usage_matches_codex_usage_event(tmp_path):
+    server = UsageAppServer(tmp_path)
+    with TestClient(create_runner_app(server.config, server)) as client:
+        result = client.post("/v1/chat/completions", headers=HEADERS, json={
+            "model": "test-codex", "messages": [{"role": "user", "content": "Hello"}]})
+        assert result.status_code == 200
+        assert result.json()["usage"]["total_tokens"] == 154
+        assert result.json()["usage"]["prompt_tokens_details"]["cached_tokens"] == 12
