@@ -14,13 +14,23 @@ import os
 import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 from urllib.parse import urlsplit
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RuntimeError("Smoke test refuses redirects; Runner must remain on loopback")
+
+
+# Explicitly bypass environment HTTP proxies and never follow redirects. A
+# malicious/misconfigured local endpoint must not forward the bearer secret.
+_LOCAL_HTTP = build_opener(ProxyHandler({}), _NoRedirect)
 
 
 def get_json(url: str, token: str) -> dict:
     request = Request(url, headers={"Authorization": "Bearer " + token})
-    with urlopen(request, timeout=40) as response:
+    with _LOCAL_HTTP.open(request, timeout=40) as response:
         return json.load(response)
 
 
@@ -28,7 +38,7 @@ def post_json(url: str, token: str, body: dict, timeout: int = 300) -> dict:
     request = Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
                       headers={"Authorization": "Bearer " + token,
                                "Content-Type": "application/json"}, method="POST")
-    with urlopen(request, timeout=timeout) as response:
+    with _LOCAL_HTTP.open(request, timeout=timeout) as response:
         return json.load(response)
 
 
@@ -38,7 +48,7 @@ def post_sse(url: str, token: str, body: dict, timeout: int = 300) -> list[dict]
                                "Content-Type": "application/json"}, method="POST")
     events = []
     finished = False
-    with urlopen(request, timeout=timeout) as response:
+    with _LOCAL_HTTP.open(request, timeout=timeout) as response:
         for raw in response:
             line = raw.decode("utf-8").strip()
             if not line.startswith("data:"):
