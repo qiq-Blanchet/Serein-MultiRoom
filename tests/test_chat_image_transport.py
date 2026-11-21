@@ -127,3 +127,46 @@ def test_eyes_transcribes_over_http_before_text_only_chat(deployment, monkeypatc
     assert 'image_url' not in encoded and PNG not in encoded and REMOTE not in encoded
     assert ('message_insert_extra_bundle' not in encoded) is operit
     assert downloads == ([REMOTE] if url == REMOTE else [])
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_codex_async_transcription_queues_for_summary_without_removing_native_image(
+        deployment, monkeypatch, stream):
+    """Real user setup: main model sees the image; the summary pipeline transcribes later."""
+    from serein.core.store import Store
+    settings, client = deployment
+    configure_transport(client, 'codex', operit=False, eyes=False)
+    configured = client.patch('/v1/settings', json={
+        'features': {'image_eyes': False, 'image_transcription_async': True}})
+    assert configured.status_code == 200, configured.text
+
+    background_calls = []
+    async def defer_work(settings, queued):
+        background_calls.append(queued['id'])
+    monkeypatch.setattr('serein.api.chat.run_queued_image_turn', defer_work)
+
+    seen = []
+    def handler(request):
+        seen.append(json.loads(request.content))
+        assert str(request.url) == 'https://provider.invalid/v1/chat/completions'
+        return reply('openai', stream)
+    install_transport(monkeypatch, handler)
+
+    messages = [{'role': 'user', 'content': [
+        {'type': 'text', 'text': 'Describe the picture directly.'},
+        {'type': 'image_url', 'image_url': {'url': PNG}}]}]
+    response = client.post('/v1/chat/completions', json={
+        'model': 'synthetic-vision', 'messages': messages, 'stream': stream,
+        'serein': {'memory': False, 'window_id': 'synthetic-codex-async'}})
+    assert response.status_code == 200, response.text
+    assert len(seen) == 1
+    assert seen[0]['messages'] == messages
+    assert background_calls and background_calls[0].startswith('image:')
+    with Store(settings.database, read_only=True) as store:
+        original = store.conn.execute(
+            "SELECT metadata_json FROM raw_events WHERE role='user'").fetchone()
+        assert json.loads(original['metadata_json'])['attachments'][0]['url'] == PNG
+        work = store.conn.execute(
+            "SELECT value_json FROM background_state WHERE name LIKE 'work:image:%'").fetchone()
+        assert work is not None
+        assert json.loads(work['value_json'])['id'] in background_calls
