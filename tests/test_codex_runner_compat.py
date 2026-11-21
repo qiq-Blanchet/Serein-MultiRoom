@@ -322,3 +322,27 @@ def test_early_app_server_dynamic_tool_request_is_buffered():
         assert server.backlog[0]["params"]["callId"] == "call-early"
         assert server.sent[0]["method"] == "turn/start"
     asyncio.run(exercise())
+
+
+def test_image_in_client_tool_continuation_is_not_sent_twice(tmp_path):
+    server = ScriptedAppServer(tmp_path)
+    payload = {"model": "test-codex", "messages": [
+        {"role": "user", "content": [
+            {"type": "text", "text": "What is in this picture?"},
+            {"type": "image_url", "image_url": {"url": IMAGE}}]},
+        {"role": "assistant", "content": None, "tool_calls": [{
+            "id": "call-1", "type": "function", "function": {
+                "name": "lookup", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call-1", "content": "Synthetic result"},
+    ]}
+    asyncio.run(_consume(server, payload))
+    history = next(params for method, params in server.calls
+                   if method == "thread/inject_items")["items"]
+    earlier = next(item for item in history if item.get("role") == "user")
+    assert {"type": "input_image", "image_url": IMAGE} in earlier["content"]
+    started = next(params for method, params in server.calls if method == "turn/start")
+    assert started["input"] == [{
+        "type": "text",
+        "text": ("Continue the existing user turn using the supplied function results. Return the final "
+                 "answer, or call another client-provided function if needed."),
+    }]
