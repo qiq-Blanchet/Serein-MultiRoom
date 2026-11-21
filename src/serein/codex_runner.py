@@ -339,8 +339,12 @@ class CodexAppServer:
                 await self._request("thread/inject_items", {"threadId":thread_id, "items":history})
                 current = next(row for row in reversed(payload["messages"]) if row.get("role") == "user")
                 turn_input = ([{"type":"text", "text":prompt}] if prompt else [])
-                turn_input.extend({"type":"image", "url":url}
-                                  for url in _image_urls(current.get("content")))
+                # On a client-tool continuation the original user turn,
+                # including its images, is already present in injected history.
+                # Do not send those images a second time in the synthetic turn.
+                if payload["messages"][-1].get("role") != "tool":
+                    turn_input.extend({"type":"image", "url":url}
+                                      for url in _image_urls(current.get("content")))
                 turn_params = {"threadId":thread_id, "input":turn_input, "model":model,
                     "approvalPolicy":"never", "sandboxPolicy":{"type":"readOnly",
                         "access":{"type":"restricted", "includePlatformDefaults":True,
