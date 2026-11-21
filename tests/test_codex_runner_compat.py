@@ -399,3 +399,22 @@ def test_unsupported_reasoning_settings_are_rejected_before_codex_runs(tmp_path,
         })
         assert resp.status_code == 400
     assert server.calls == []
+
+
+def test_codex_completed_partial_answer_is_safe_fallback(tmp_path):
+    class PartialOnlyAppServer(ScriptedAppServer):
+        async def _request(self, method, params):
+            result = await super()._request(method, params)
+            if method == "turn/start":
+                self.notifications[0]["params"]["item"]["phase"] = "partial_answer"
+                self.notifications[1]["params"]["phase"] = "partial_answer"
+                self.notifications[2]["params"]["item"]["phase"] = "partial_answer"
+            return result
+
+    server = PartialOnlyAppServer(tmp_path)
+    events = asyncio.run(_consume(server, {
+        "model": "test-codex",
+        "messages": [{"role": "user", "content": "Hello"}]}))
+    assert events == [
+        {"type": "delta", "text": "A test reply"},
+        {"type": "completed", "text": "A test reply"}]
