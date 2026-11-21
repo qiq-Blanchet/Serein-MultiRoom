@@ -59,9 +59,13 @@ def routes(settings, auth):
                 (receipt_id,window_id,payload_hash))
         archived=archive_host_turn(settings,receipt_id=receipt_id,window_id=window_id,
             user_message=user_message,assistant_message=assistant_message,client=client)
+        # Never acknowledge a completed turn that raw ingestion rejected.
+        # The receipt remains idempotent: callers can retry the same payload.
+        if archived.get('status') == 'rejected' or archived.get('rejected'):
+            raise HTTPException(503, 'Host turn archive rejected; retry this receipt')
         record_delivery({'receipt_id':receipt_id,'window_id':window_id,'delivered_ids':delivered_ids})
         return {'status':'recorded','reported_by':'host','delivered_ids':delivered_ids,
-                'raw_archive':archived,'pipeline_eligible':not bool(archived.get('rejected'))}
+                'raw_archive':archived,'pipeline_eligible':True}
 
     @router.get('/v1/host/deliveries')
     def history(limit:int=Query(80,ge=1,le=200),before_id:int=0,
