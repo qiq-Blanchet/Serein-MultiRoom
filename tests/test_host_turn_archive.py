@@ -46,3 +46,26 @@ def test_completed_host_turn_rejects_receipt_reuse_and_incomplete_turn(deploymen
     conflict = client.post('/v1/host/turns', json={**body, 'assistant_message':'different'})
     assert conflict.status_code == 400
     assert client.post('/v1/host/turns', json={**body, 'receipt_id':'empty', 'assistant_message':''}).status_code == 400
+
+
+def test_rejected_host_archive_is_not_acknowledged_and_can_retry(deployment,monkeypatch):
+    settings,client=deployment
+    body={'receipt_id':'host-rejected-then-retried','window_id':'work:synthetic',
+          'user_message':'Synthetic user text','assistant_message':'Synthetic answer',
+          'delivered_ids':['scene:synthetic'], 'client':'codex_local_hook'}
+    from serein.api import host
+    original=host.archive_host_turn
+    monkeypatch.setattr(host,'archive_host_turn',lambda *args,**kwargs:
+                        {'status':'rejected','rejected':1})
+    failed=client.post('/v1/host/turns',json=body)
+    assert failed.status_code==503
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute('SELECT count(*) FROM host_deliveries').fetchone()[0]==0
+    monkeypatch.setattr(host,'archive_host_turn',original)
+    recovered=client.post('/v1/host/turns',json=body)
+    recovered.raise_for_status()
+    assert recovered.json()['status']=='recorded'
+    assert recovered.json()['pipeline_eligible'] is True
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute('SELECT count(*) FROM host_deliveries').fetchone()[0]==1
+        assert store.conn.execute('SELECT count(*) FROM raw_events').fetchone()[0]==2
