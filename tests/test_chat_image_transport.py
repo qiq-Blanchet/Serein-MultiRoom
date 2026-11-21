@@ -37,6 +37,23 @@ def install_transport(monkeypatch, handler):
     return clients
 
 
+@pytest.mark.parametrize('stream', [False, True])
+def test_codex_transport_bypasses_environment_proxy(deployment, monkeypatch, stream):
+    _, client = deployment
+    configure_transport(client, 'codex', False)
+    original = httpx.AsyncClient
+    options = []
+    def transport(**kwargs):
+        options.append(kwargs.copy())
+        return original(transport=httpx.MockTransport(lambda request: reply('codex', stream)), **kwargs)
+    monkeypatch.setattr(httpx, 'AsyncClient', transport)
+    response = client.post('/v1/chat/completions', json={
+        'messages': [{'role': 'user', 'content': 'Synthetic request'}],
+        'stream': stream, 'serein': {'memory': False}})
+    assert response.status_code == 200, response.text
+    assert options and all(option.get('trust_env') is False for option in options)
+
+
 def reply(protocol, stream, text='Synthetic answer'):
     if not stream:
         if protocol == 'anthropic':

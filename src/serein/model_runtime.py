@@ -156,7 +156,8 @@ async def complete(model, payload, *, window_id=''):
     timeout=httpx.Timeout(model.get('request_timeout_seconds',default_timeout),connect=15,pool=15)
     started=monotonic()
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False,
+                                    trust_env=model.get('protocol') != 'codex') as client:
             response = await client.post(url, headers=headers, json=body)
             if not response.is_success:
                 raise UpstreamError(response)

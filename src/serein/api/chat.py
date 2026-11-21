@@ -363,7 +363,7 @@ def routes(settings, services, auth):
         # Stream read timeout must cover the Codex runner's bounded 30–1800s turn.
         stream_timeout = 1830 if model.get('protocol') == 'codex' else 120
         client = httpx.AsyncClient(timeout=httpx.Timeout(stream_timeout,connect=15,pool=15),
-                                  follow_redirects=False)
+                                  follow_redirects=False, trust_env=model.get('protocol') != 'codex')
         try:
             response = await client.send(client.build_request('POST',url,headers=headers,json=payload),stream=True)
             if not response.is_success:

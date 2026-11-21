@@ -26,7 +26,8 @@ async def discover(settings, request, *, client=None):
     if request.get('protocol') == 'anthropic':
         headers = {'anthropic-version': '2023-06-01', **({'x-api-key': key} if key else {})}
     owned = client is None
-    client = client or httpx.AsyncClient(timeout=15, follow_redirects=False)
+    client = client or httpx.AsyncClient(timeout=15, follow_redirects=False,
+                                         trust_env=request.get('protocol') != 'codex')
     try:
         async with client.stream('GET',base+'/models',headers=headers) as response:
             if response.status_code != 200:
