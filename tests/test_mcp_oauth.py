@@ -24,6 +24,11 @@ def _authorize(client, registration, *, state='exact-state', resource='https://m
     page = client.get('/authorize', params=params)
     assert page.status_code == 200
     assert 'synthetic-gateway-key' not in page.text
+    csp = page.headers['content-security-policy']
+    callback = urlsplit(params['redirect_uri'])
+    callback_origin = f'{callback.scheme}://{callback.netloc}'
+    assert f"form-action 'self' {callback_origin}" in csp
+    assert callback.path not in csp
     consent = client.post('/authorize', data={**params, 'gateway_key':'synthetic-gateway-key'},
                           follow_redirects=False)
     assert consent.status_code == 303
@@ -159,6 +164,72 @@ def test_oauth_rejects_open_redirect_bad_key_and_replayed_code(tmp_path):
             'resource':valid['resource'],
         })
         assert replay.status_code == 400 and replay.json()['error'] == 'invalid_grant'
+
+
+def test_oauth_authorize_csp_allows_validated_loopback_callback_origin(tmp_path):
+    settings = Settings(tmp_path/'memory.db')
+    with Store(settings.database):
+        pass
+    with TestClient(create_app(settings, token='synthetic-gateway-key'),
+                    base_url='https://memory.example') as client:
+        registration = client.post('/register', json={
+            'client_name':'Codex',
+            'redirect_uris':['http://127.0.0.1:4321/callback/session'],
+        }).json()
+        params = {
+            'response_type':'code', 'client_id':registration['client_id'],
+            'redirect_uri':registration['redirect_uris'][0], 'state':'state',
+            'code_challenge':_challenge('v'*43), 'code_challenge_method':'S256',
+            'resource':'https://memory.example/serein/mcp',
+        }
+        page = client.get('/authorize', params=params)
+        assert page.status_code == 200
+        csp = page.headers['content-security-policy']
+        assert "form-action 'self' http://127.0.0.1:4321" in csp
+        assert '/callback/session' not in csp
+
+
+def test_oauth_redirect_registration_rejects_csp_injection_and_bad_ports(tmp_path):
+    settings = Settings(tmp_path/'memory.db')
+    with Store(settings.database):
+        pass
+    with TestClient(create_app(settings, token='synthetic-gateway-key'),
+                    base_url='https://memory.example') as client:
+        malicious = client.post('/register', json={
+            'client_name':'malicious',
+            'redirect_uris':['https://[::1%foo;frame-ancestors *;x]/callback'],
+        })
+        assert malicious.status_code == 400
+        assert 'frame-ancestors' not in malicious.headers.get('content-security-policy', '')
+
+        bad_port = client.post('/register', json={
+            'client_name':'bad-port',
+            'redirect_uris':['https://client.example:not-a-port/callback'],
+        })
+        assert bad_port.status_code == 400
+
+
+def test_oauth_authorize_csp_serializes_ipv6_callback_origin(tmp_path):
+    settings = Settings(tmp_path/'memory.db')
+    with Store(settings.database):
+        pass
+    with TestClient(create_app(settings, token='synthetic-gateway-key'),
+                    base_url='https://memory.example') as client:
+        registration = client.post('/register', json={
+            'client_name':'IPv6 client',
+            'redirect_uris':['http://[::1]:4321/callback'],
+        }).json()
+        params = {
+            'response_type':'code', 'client_id':registration['client_id'],
+            'redirect_uri':registration['redirect_uris'][0], 'state':'state',
+            'code_challenge':_challenge('v'*43), 'code_challenge_method':'S256',
+            'resource':'https://memory.example/serein/mcp',
+        }
+        page = client.get('/authorize', params=params)
+        assert page.status_code == 200
+        csp = page.headers['content-security-policy']
+        assert "form-action 'self' http://[::1]:4321" in csp
+        assert '/callback' not in csp
 
 
 def test_oauth_registration_cap_evicts_unused_clients_and_public_http_is_refused(tmp_path, monkeypatch):
