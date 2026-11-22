@@ -496,6 +496,25 @@ def test_client_reasoning_effort_reaches_codex_turn_start(tmp_path, control):
 
 
 @pytest.mark.parametrize("control", [
+    {"reasoning_effort": "none"},
+    {"reasoning": {"effort": "none"}},
+    {"thinking": {"type": "disabled"}},
+])
+def test_disabled_client_reasoning_uses_lowest_codex_effort(tmp_path, control):
+    server = ScriptedAppServer(tmp_path)
+    asyncio.run(_consume(server, {
+        "model": "test-codex",
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant"},
+            {"role": "user", "content": "hello"},
+        ],
+        **control,
+    }))
+    turn = next(params for method, params in server.calls if method == "turn/start")
+    assert turn["effort"] == "low"
+
+
+@pytest.mark.parametrize("control", [
     {"reasoning_effort": "unknown"},
     {"reasoning": {"effort": "high", "summary": "detailed"}},
     {"thinking": {"type": "enabled", "budget_tokens": 1024}},

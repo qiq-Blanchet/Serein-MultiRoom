@@ -112,6 +112,12 @@ def completion_options(payload: dict[str, Any]) -> dict[str, Any]:
     if len(set(choices)) > 1:
         raise ValueError("Conflicting Codex reasoning effort settings")
     effort = choices[0] if choices else None
+    # OpenAI-compatible clients such as Orbis use ``none`` for a disabled
+    # reasoning toggle. Codex models still reason and reject that value at
+    # turn/start, so use their closest supported setting instead of turning a
+    # valid client request into an upstream 502.
+    if effort == "none":
+        effort = "low"
     for key in ("temperature", "top_p"):
         val = payload.get(key)
         if val is not None and (type(val) not in (int, float) or val != 1):
