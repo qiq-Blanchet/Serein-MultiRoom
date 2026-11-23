@@ -199,6 +199,59 @@ def test_dynamic_tool_call_stays_on_client_side(tmp_path):
                    for method, args in server.calls)
 
 
+def test_reserved_mcp_tool_name_is_aliased_for_app_server_and_restored_for_client(tmp_path):
+    original = "mcp__GPTSereinMemory__read_memory"
+
+    class ReservedToolAppServer(ScriptedAppServer):
+        async def _request(self, method, params):
+            result = await super()._request(method, params)
+            if method == "thread/start":
+                self.alias = params["dynamicTools"][0]["name"]
+                assert self.alias != original and not self.alias.startswith("mcp__")
+            elif method == "turn/start" and self.emit_tool:
+                self.notifications[0]["params"]["tool"] = self.alias
+            return result
+
+    server = ReservedToolAppServer(tmp_path, emit_tool=True)
+    tool = {"type": "function", "function": {
+        "name": original, "description": "Read a Serein memory",
+        "parameters": {"type": "object", "properties": {
+            "memory_id": {"type": "string"}}, "required": ["memory_id"]}}}
+    first = {"model": "test-codex",
+        "messages": [{"role": "user", "content": "Read the memory"}],
+        "tools": [tool]}
+    with TestClient(create_runner_app(server.config, server)) as client:
+        response = client.post("/v1/chat/completions", headers=HEADERS, json=first)
+        assert response.status_code == 200
+        call = response.json()["choices"][0]["message"]["tool_calls"][0]
+        assert call["id"] == "call-123"
+        assert call["function"]["name"] == original
+
+        streamed = client.post("/v1/chat/completions", headers=HEADERS,
+                               json={**first, "stream": True})
+        assert streamed.status_code == 200
+        assert original in streamed.text and "call-123" in streamed.text
+        assert server.alias not in streamed.text
+
+        server.emit_tool = False
+        continuation = client.post("/v1/chat/completions", headers=HEADERS, json={
+            **first,
+            "messages": [
+                *first["messages"],
+                {"role": "assistant", "content": None, "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": "call-123", "content": "Memory text"},
+            ],
+        })
+        assert continuation.status_code == 200
+        assert continuation.json()["choices"][0]["message"]["content"] == "A test reply"
+
+    injected = [params for method, params in server.calls if method == "thread/inject_items"][-1]
+    history_call = next(item for item in injected["items"] if item["type"] == "function_call")
+    history_output = next(item for item in injected["items"] if item["type"] == "function_call_output")
+    assert history_call["name"] == server.alias
+    assert history_call["call_id"] == history_output["call_id"] == "call-123"
+
+
 def test_options_do_not_silently_override_client_tool_choice(tmp_path):
     server = ScriptedAppServer(tmp_path)
     payload = {"model": "test-codex",

@@ -73,7 +73,7 @@ Codex 上游不使用 Serein 的 prompt cache 选项；线程与账户侧缓存�
 - Window Header：`X-Serein-Window-ID`，同一会话固定，新会话更换
 - MCP：`https://gptmemory.你的域名/serein/mcp`
 
-客户端发送的 OpenAI function tools 会映射为 Codex App Server 的实验性 `dynamicTools`。Codex 要调用工具时，Runner 返回标准 Chat Completions `tool_calls`；**客户端原有的 MCP／本地工具仍由客户端执行**，客户端再把 `role: tool` 结果续发，Runner 按原有对话历史继续生成。这里不需要把客户端的工具安装进 Codex 工作目录，也不允许 Codex 替客户端执行文件、命令或其他本地操作。
+客户端发送的 OpenAI function tools 会映射为 Codex App Server 的实验性 `dynamicTools`。App Server 保留了 `mcp__` 工具名前缀，因此 Runner 会在单次请求内把这类客户端名称确定性地转为安全别名，并在返回 `tool_calls` 前还原原名；调用 ID、arguments 和后续 `role: tool` 历史不变，转换后别名若重复则拒绝请求而不静默覆盖。Codex 要调用工具时，Runner 返回标准 Chat Completions `tool_calls`；**客户端原有的 MCP／本地工具仍由客户端执行**，客户端再把 `role: tool` 结果续发，Runner 按原有对话历史继续生成。这里不需要把客户端的工具安装进 Codex 工作目录，也不允许 Codex 替客户端执行文件、命令或其他本地操作。
 
 当前每次模型响应只桥接一个工具调用，并要求 Codex 串行请求客户端工具；工具结果中的文字及 Base64 内联图片会继续传给模型。支持文字与 OpenAI Chat Completions 的 Base64 内联 `image_url`（当前消息、历史消息和客户端工具结果）；为避免 Runner 代客户端访问内部网络，暂不支持 HTTP(S) 图片 URL，也不支持音频／视频、多工具并行、旧 `functions` 字段以及所有的自定义响应选项。`max_tokens` 与 `max_completion_tokens` 当前仅校验格式，App Server 没有等价的逐请求输出长度限制映射，不能依赖它们强制截断生成。对不支持且会改变行为的选项明确返回 400，不默默吞掉参数。支持 `tool_choice=auto/none`；`response_format=json_schema` 严格映射到 App Server 的 `outputSchema`，`json_object` 则使用只输出 JSON 的 developer 约束并由调用方继续解析校验，因为 App Server 的严格 schema 不能表达任意 JSON 对象。Runner 还会将 `reasoning_effort`、`reasoning.effort` 或 `thinking.type` 的合法思考档位映射到当前 Codex turn 的 `effort`。Codex 模型不能真正关闭推理，因此第三方客户端的 `none` / `disabled` 会映射到最低兼容档 `low`；其余模型可用档位不同，以 `/v1/models` 及 Codex 实际模型目录为准，不支持的预算型 `thinking` 参数会明确报错。`stream_options.include_usage` 仅在 App Server 实际报告 token 数量时返回用量。带图片的真实模型验收仍是上线前置条件；如果前端只发远程图片 URL，应先在客户端转为内联图片，或者临时切回已支持远程图片的上游。
 

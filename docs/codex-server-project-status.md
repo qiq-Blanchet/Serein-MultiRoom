@@ -1,6 +1,6 @@
 # Codex Server 项目状态与运维交接
 
-> 状态：2026-11-23 已完成本轮独立审查、隔离 VPS 部署与真实客户端验收。本轮合并目标是 `codex-server`，不包含 `main` 发布。
+> 状态：2026-11-24 已完成本轮独立审查、隔离 VPS 部署与真实 App Server 验收。本轮合并目标是 `codex-server`，不包含 `main` 发布。
 >
 > 本文记录“已完成、已验证、未完成和运维边界”。架构与配置方法见 [Codex 登录态聊天网关与 Serein 记忆](codex-chat-runner.md)，审查项见 [Codex Runner 独立复核交接单](codex-runner-review-handoff.md)。
 
@@ -32,6 +32,7 @@ MCP 仍由 Serein 提供；客户端工具仍由客户端执行。Runner 只负�
 ### 2.2 客户端工具往返
 
 - OpenAI function tools 映射为 App Server `dynamicTools`。
+- 客户端 `mcp__...` 工具名会在 App Server 边界转成请求内安全别名，返回客户端时还原；转换后的重名别名会被明确拒绝。
 - Codex 工具请求转为标准 `tool_calls`，保留调用 ID、函数名和 arguments。
 - 客户端执行工具后用 `role: tool` 回传，Runner 根据完整历史继续生成。
 - 文本与 Base64 内联图片的工具结果可继续传给模型。
@@ -69,7 +70,8 @@ MCP 仍由 Serein 提供；客户端工具仍由客户端执行。Runner 只负�
 ### 3.2 隔离 VPS 真实验收
 
 - 真实 Codex 登录态能列出模型并完成流式/非流式聊天。
-- 实际使用的 Orbis 客户端已完成普通聊天、思考档位、客户端工具续轮和图片输入。
+- 真实 App Server 已通过 109 个合成 `mcp__...` 工具的非调用请求，以及原名还原、调用 ID 保留和 `role: tool` 续轮。
+- 实际使用的 Orbis 客户端已完成普通聊天、思考档位、客户端工具续轮和图片输入。2026-11-24 启用完整 MCP 工具集后的回归也已通过：普通对话和真实工具调用均恢复正常。
 - Serein 记忆召回、原话归档与后台材料链保留在 Gateway 前后。
 - ChatGPT 自定义 MCP 通过浏览器 OAuth 成功连接。
 

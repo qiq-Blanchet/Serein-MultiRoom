@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from serein.codex_runner import RunnerConfig, create_runner_app, dynamic_tools, prepare_messages
@@ -81,6 +82,34 @@ def test_runner_maps_client_tools_and_continuation_history():
     assert any(item.get('type') == 'function_call' and item['call_id'] == 'call-1' for item in history)
     assert any(item.get('type') == 'function_call_output' and item['output'] == 'Synthetic result' for item in history)
     assert prompt.startswith('Continue the existing user turn')
+
+
+def test_runner_aliases_reserved_mcp_tool_names_without_collisions():
+    tools = [{'type':'function','function':{
+        'name':f'mcp__GPTSereinMemory_{index}__read_memory',
+        'parameters':{'type':'object'},
+    }} for index in range(109)]
+    converted = dynamic_tools({'tools':tools})
+    aliases = [item['name'] for item in converted]
+    assert len(aliases) == 109
+    assert len(set(aliases)) == 109
+    assert all(not name.startswith('mcp__') and len(name) <= 128 for name in aliases)
+    assert aliases == [item['name'] for item in dynamic_tools({'tools':tools})]
+
+
+def test_runner_rejects_generated_tool_alias_collisions(monkeypatch):
+    class FixedDigest:
+        def hexdigest(self):
+            return '0' * 64
+
+    monkeypatch.setattr('serein.codex_runner.hashlib.sha256', lambda _value: FixedDigest())
+    shared = 'mcp__' + ('a' * 122)
+    tools = [{'type':'function','function':{
+        'name':shared + suffix,
+        'parameters':{'type':'object'},
+    }} for suffix in ('x', 'y')]
+    with pytest.raises(ValueError, match='duplicate function tool aliases'):
+        dynamic_tools({'tools':tools})
 
 
 def test_runner_returns_client_tool_calls_in_chat_completions_shapes(tmp_path):

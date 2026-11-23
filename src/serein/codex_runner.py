@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import os
@@ -18,6 +19,7 @@ from fastapi.responses import StreamingResponse
 
 
 APP_SERVER_STDIO_LIMIT = 32 * 1024 * 1024
+CLIENT_TOOL_ALIAS_PREFIX = "serein_client__"
 
 
 class CodexRunnerError(RuntimeError):
@@ -172,6 +174,7 @@ def dynamic_tools(payload: dict[str, Any]) -> list[dict[str, Any]]:
         raise ValueError("tools must be a list")
     converted = []
     seen = set()
+    app_server_seen = set()
     for row in tools:
         function = row.get("function") if isinstance(row, dict) and row.get("type") == "function" else None
         name = function.get("name") if isinstance(function, dict) else None
@@ -182,10 +185,24 @@ def dynamic_tools(payload: dict[str, Any]) -> list[dict[str, Any]]:
         parameters = function.get("parameters") or {"type":"object", "properties":{}}
         if not isinstance(description, str) or not isinstance(parameters, dict):
             raise ValueError("Function tool description and parameters are invalid")
+        app_server_name = _app_server_tool_name(name)
+        if app_server_name in app_server_seen:
+            raise ValueError("Codex runner generated duplicate function tool aliases")
         seen.add(name)
-        converted.append({"type":"function", "name":name, "description":description[:4096],
+        app_server_seen.add(app_server_name)
+        converted.append({"type":"function", "name":app_server_name,
+                          "description":description[:4096],
                           "inputSchema":parameters})
     return converted
+
+
+def _app_server_tool_name(name: str) -> str:
+    """Keep App Server-reserved MCP names private while preserving client identity."""
+    if not name.startswith("mcp__") and not name.startswith(CLIENT_TOOL_ALIAS_PREFIX):
+        return name
+    suffix = "__" + hashlib.sha256(name.encode()).hexdigest()[:12]
+    available = 128 - len(CLIENT_TOOL_ALIAS_PREFIX) - len(suffix)
+    return CLIENT_TOOL_ALIAS_PREFIX + name[:available] + suffix
 
 
 def prepare_messages(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
@@ -254,7 +271,8 @@ def prepare_messages(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], str
                 if not isinstance(arguments, str):
                     arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
                 items.append({"type":"function_call", "call_id":str(tool_call["id"]),
-                              "name":str(function["name"]), "arguments":arguments})
+                              "name":_app_server_tool_name(str(function["name"])),
+                              "arguments":arguments})
     prompt = ("Continue the existing user turn using the supplied function results. Return the final "
               "answer, or call another client-provided function if needed.") if continuation else current
     return items, prompt
@@ -399,6 +417,8 @@ class CodexAppServer:
                     "approvalPolicy":"never", "sandbox":"read-only",
                     "serviceName":"serein_codex_runner"}
                 tools = dynamic_tools(payload) if controls["tool_choice"] != "none" else []
+                client_tool_names = {tool["name"]: source["function"]["name"]
+                                     for tool, source in zip(tools, payload.get("tools") or [])}
                 if tools:
                     thread_params["dynamicTools"] = tools
                 started = await self._request("thread/start", thread_params)
@@ -437,12 +457,13 @@ class CodexAppServer:
                             if (params.get("threadId") != thread_id
                                     or (turn_id and params.get("turnId") != turn_id)):
                                 raise CodexRunnerError("Codex tool call belongs to another turn")
-                            if not tool or not call_id or tool not in {row["name"] for row in tools}:
+                            if not tool or not call_id or tool not in client_tool_names:
                                 raise CodexRunnerError("Codex requested an unknown client tool")
                             arguments = params.get("arguments", {})
                             encoded = arguments if isinstance(arguments, str) else json.dumps(
                                 arguments, ensure_ascii=False, separators=(",", ":"))
-                            yield {"type":"tool_call", "id":call_id, "name":tool,
+                            yield {"type":"tool_call", "id":call_id,
+                                   "name":client_tool_names[tool],
                                    "arguments":encoded}
                             await self.close()
                             return
