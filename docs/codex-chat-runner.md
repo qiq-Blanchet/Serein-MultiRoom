@@ -4,6 +4,8 @@
 
 它不是 OpenAI API Key 的替代协议，也不把 Codex 登录凭据存入 Serein。使用资格、限额和可用模型由 Runner 所登录的 ChatGPT 账号及当时的 Codex 客户端决定。
 
+当前已完成事项、已验证范围、未完成限制与运维注意事项见 [Codex Server 项目状态与运维交接](codex-server-project-status.md)。
+
 交给 Codex 做独立代码审查时，先读 [复核交接单](codex-runner-review-handoff.md)。该清单明确了需要审查的 App Server 协议、前端工具往返、图片/异步转录以及上线前未验证事项。
 
 ## 拓扑与边界

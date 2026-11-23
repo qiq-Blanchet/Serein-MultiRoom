@@ -1,6 +1,6 @@
 # Codex Runner 独立复核交接单（部署前）
 
-> 状态：待独立代码审查 / 待真实 Codex 登录态验收。此文档描述 PR 的设计意图与待验证事项，**不是“已上线”或“真实客户端验证通过”的证明**。
+> 状态：2026-11-23 已完成本轮独立代码审查、隔离部署与真实 Codex/客户端验收。本文保留为后续升级的复核清单；当前结论与证据边界见 [Codex Server 项目状态与运维交接](codex-server-project-status.md)。
 >
 > 日期：2026-11-21。基线 `codex-server`；工作分支 `fix/codex-client-parity-20261121`；Draft PR [#1](https://github.com/qiq-Blanchet/Serein-MultiRoom/pull/1)。请对比 `codex-server...fix/codex-client-parity-20261121`，以实际分支最新代码为准。
 
