@@ -11,6 +11,7 @@ import base64
 import hashlib
 import hmac
 import html
+import ipaddress
 import json
 import secrets
 import sqlite3
@@ -95,7 +96,35 @@ def _redirect_uri(value: str) -> str:
         raise ValueError("redirect_uri must use HTTPS or a loopback HTTP address")
     if parsed.username or parsed.password or parsed.fragment:
         raise ValueError("Invalid redirect_uri")
+    _csp_origin(value)
     return value
+
+
+def _csp_origin(value: str) -> str:
+    parsed = urlsplit(value)
+    hostname = parsed.hostname or ""
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Invalid redirect_uri port") from exc
+    if ":" in hostname:
+        if "%" in hostname:
+            raise ValueError("IPv6 zone identifiers are not supported")
+        try:
+            safe_host = f"[{ipaddress.IPv6Address(hostname).compressed}]"
+        except ipaddress.AddressValueError as exc:
+            raise ValueError("Invalid redirect_uri host") from exc
+    else:
+        if parsed.netloc.startswith("["):
+            raise ValueError("IPvFuture redirect_uri hosts are not supported")
+        try:
+            safe_host = hostname.encode("idna").decode("ascii")
+        except UnicodeError as exc:
+            raise ValueError("Invalid redirect_uri host") from exc
+        if not safe_host or any(not (char.isalnum() or char in ".-") for char in safe_host):
+            raise ValueError("Invalid redirect_uri host")
+    suffix = f":{port}" if port is not None else ""
+    return f"{parsed.scheme}://{safe_host}{suffix}"
 
 
 def _append_query(uri: str, values: dict[str, str]) -> str:
@@ -400,6 +429,7 @@ def routes(database: Path, gateway_key: str) -> tuple[APIRouter, OAuthStore]:
             if len(keys) != len(set(keys)):
                 raise ValueError("Duplicate authorization parameter")
             params = _authorization_params(dict(request.query_params), store, origin)
+            callback_origin = _csp_origin(params["redirect_uri"])
         except ValueError as exc:
             return _oauth_error("invalid_request", str(exc))
         hidden = "".join(f'<input type="hidden" name="{html.escape(key)}" value="{html.escape(value, quote=True)}">'
@@ -413,7 +443,8 @@ def routes(database: Path, gateway_key: str) -> tuple[APIRouter, OAuthStore]:
 <label>Gateway Key <input name="gateway_key" type="password" required autocomplete="current-password"></label>
 <button type="submit">确认授权</button></form></main></body></html>"""
         return HTMLResponse(page, headers={"Cache-Control": "no-store", "Pragma": "no-cache",
-            "Content-Security-Policy": "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+            "Content-Security-Policy": ("default-src 'none'; "
+                f"form-action 'self' {callback_origin}; base-uri 'none'; frame-ancestors 'none'"),
             "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"})
 
     @router.post("/authorize")

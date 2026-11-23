@@ -253,6 +253,28 @@ def test_transcription_has_wall_clock_timeout(settings, monkeypatch):
         asyncio.run(transcribe_images({}, images, timeout_seconds=.01))
 
 
+@pytest.mark.parametrize('protocol,has_temperature', [('openai', True), ('codex', False)])
+def test_transcription_uses_only_protocol_supported_temperature(
+        settings, monkeypatch, protocol, has_temperature):
+    from serein.image_transcription import transcribe_images
+    from serein.extensions.pipeline_images import freeze_images
+    captured = []
+
+    async def complete(_model, payload):
+        captured.append(payload)
+        return {'choices':[{'message':{'content':json.dumps({'image_transcriptions':[
+            {'input_image':1,'text':'Visible title','unreadable':False}]})}}]}
+
+    monkeypatch.setattr('serein.image_transcription.complete', complete)
+    images = freeze_images([{'source_message_id':1, 'position':1,
+        'evidence_role':'owned', 'url':PNG}])
+    rows = asyncio.run(transcribe_images({'protocol':protocol}, images))
+    assert rows[0]['text'] == 'Visible title'
+    assert ('temperature' in captured[0]) is has_temperature
+    if has_temperature:
+        assert captured[0]['temperature'] == 0
+
+
 def test_pipeline_partial_success_finishes_with_image_count(settings):
     configure(settings)
     urls = pictures()

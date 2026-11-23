@@ -130,3 +130,4 @@ def test_partial_image_failure_keeps_success_for_a_later_retry(deployment, monke
         raw = store.conn.execute("SELECT image_transcription_status,image_transcription_json FROM raw_events WHERE role='user'").fetchone()
     assert raw['image_transcription_status'] == 'failed'
     assert json.loads(raw['image_transcription_json'])['items'][0]['text'] == 'Synthetic first image'
+

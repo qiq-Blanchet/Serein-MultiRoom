@@ -93,3 +93,20 @@ def test_environment_secret_and_catalog_limit(deployment,monkeypatch):
     result=run(settings,p,handle)
     assert len(result['models'])==2000 and result['truncated']
     assert run(settings,p,lambda req:httpx.Response(200,json={'data':[{'id':'first-page'}],'has_more':True}))['truncated']
+
+
+def test_owned_codex_discovery_bypasses_environment_proxy(deployment, monkeypatch):
+    settings, _, request = prepare(deployment)
+    request['protocol'] = 'codex'
+    original = httpx.AsyncClient
+    options = []
+    def client(**kwargs):
+        options.append(kwargs.copy())
+        return original(transport=httpx.MockTransport(
+            lambda req: httpx.Response(200, json={'data':[{'id':'codex-model'}]})), **kwargs)
+    monkeypatch.setattr(httpx, 'AsyncClient', client)
+    assert asyncio.run(discover(settings, request))['models'] == ['codex-model']
+    assert len(options) == 1
+    assert options[0]['timeout'] == 15
+    assert options[0]['follow_redirects'] is False
+    assert options[0]['trust_env'] is False

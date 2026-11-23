@@ -360,7 +360,10 @@ def routes(settings, services, auth):
             completed(message)
             return JSONResponse(result,headers=headers_out,background=background_tasks)
         url,headers,payload = request_for(model,body,window_id=window_id)
-        client = httpx.AsyncClient(timeout=120,follow_redirects=False)
+        # Stream read timeout must cover the Codex runner's bounded 30–1800s turn.
+        stream_timeout = 1830 if model.get('protocol') == 'codex' else 120
+        client = httpx.AsyncClient(timeout=httpx.Timeout(stream_timeout,connect=15,pool=15),
+                                  follow_redirects=False, trust_env=model.get('protocol') != 'codex')
         try:
             response = await client.send(client.build_request('POST',url,headers=headers,json=payload),stream=True)
             if not response.is_success:
