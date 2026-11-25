@@ -149,6 +149,7 @@ class ClientContext:
         payload: dict[str, Any],
         cache_control: dict[str, str],
         model: str = "",
+        tail_tokens: int | None = None,
     ) -> None:
         self._attach_cache_control_to_anthropic_content(payload, "system", cache_control)
         self._attach_cache_control_to_anthropic_tools(payload, cache_control)
@@ -156,7 +157,7 @@ class ClientContext:
         if not isinstance(messages, list):
             return
 
-        breakpoint_index = self._find_cache_breakpoint(messages, model=model)
+        breakpoint_index = self._find_cache_breakpoint(messages, model=model, tail_tokens=tail_tokens)
         if breakpoint_index is None:
             return
         message = messages[breakpoint_index]
@@ -174,11 +175,11 @@ class ClientContext:
     def _cache_tail_tokens_for_model(model: str) -> int:
         return 4000
 
-    def _find_cache_breakpoint(self, messages: list[Any], *, model: str = "") -> int | None:
+    def _find_cache_breakpoint(self, messages: list[Any], *, model: str = "", tail_tokens: int | None = None) -> int | None:
         if not isinstance(messages, list) or len(messages) < 3:
             return None
         min_tokens = self._cache_min_tokens_for_model(model)
-        tail_target = self._cache_tail_tokens_for_model(model)
+        tail_target = self._cache_tail_tokens_for_model(model) if tail_tokens is None else tail_tokens
         estimates = [
             self._anthropic_message_token_estimate(message)
             if isinstance(message, dict)
@@ -1290,6 +1291,74 @@ class ClientContext:
             return {}
         return parsed if isinstance(parsed, dict) else {}
 
+    def _anthropic_context_layout(
+        self, messages: list[Any], upstream: dict[str, Any]
+    ) -> list[Any]:
+        """Project dynamic context only on the upstream request copy.
+
+        Orbis marks request-only host data with a wire name, independently of
+        its role. Never promote this data to the global Anthropic system.
+        Unmarked late system instructions are moved only in the opt-in late
+        mode, and only when an adjacent real user message can carry them.
+        Leading system instructions and unmatched system messages retain their
+        original handling. Do not insert anything between tool calls/results.
+        """
+        mode = upstream.get("anthropic_system_layout", "legacy")
+        if mode not in {"host-data", "late-system"}:
+            return messages
+        result: list[Any] = []
+        seen_dialogue = False
+        index = 0
+        while index < len(messages):
+            message = messages[index]
+            if not isinstance(message, dict) or message.get("role") != "system":
+                result.append(message)
+                if isinstance(message, dict) and message.get("role") in {"user", "assistant", "tool"}:
+                    seen_dialogue = True
+                index += 1
+                continue
+            end = index
+            while end < len(messages) and isinstance(messages[end], dict) and messages[end].get("role") == "system":
+                end += 1
+            carrier = messages[end] if end < len(messages) else None
+            if not isinstance(carrier, dict) or carrier.get("role") != "user":
+                result.extend(messages[index:end])
+                index = end
+                continue
+            # A user content array can itself be a tool-result carrier.
+            content = carrier.get("content")
+            if not isinstance(content, (str, list)) or (
+                isinstance(content, list) and any(
+                    isinstance(block, dict) and block.get("type") in {"tool_result", "tool_use"}
+                    for block in content
+                )
+            ):
+                result.extend(messages[index:end])
+                index = end
+                continue
+            moved: list[str] = []
+            for system in messages[index:end]:
+                text = self._coerce_message_text(system.get("content")).strip()
+                host_data = system.get("name") == "orbis_host_data_v1"
+                if text and (host_data or (mode == "late-system" and seen_dialogue)):
+                    # Keep the source and diminished instruction authority explicit.
+                    tag = "serein_client_host_data" if host_data else "serein_late_system_context"
+                    moved.append(f"<{tag}>\n{text}\n</{tag}>")
+                else:
+                    result.append(system)
+            if moved:
+                updated = deepcopy(carrier)
+                prefix = "\n\n".join(moved) + "\n\n"
+                updated["content"] = prefix + content if isinstance(content, str) else [
+                    {"type": "text", "text": prefix}, *deepcopy(content)
+                ]
+                result.append(updated)
+            else:
+                result.append(carrier)
+            seen_dialogue = True
+            index = end + 1
+        return result
+
     def _anthropic_payload_for_upstream(
         self,
         payload: dict[str, Any],
@@ -1303,7 +1372,8 @@ class ClientContext:
         }
 
         system_parts: list[str] = []
-        for message in payload.get("messages", []):
+        messages = self._anthropic_context_layout(payload.get("messages", []), upstream)
+        for message in messages:
             if not isinstance(message, dict):
                 continue
             role = str(message.get("role") or "").strip()
@@ -1384,6 +1454,7 @@ class ClientContext:
             payload,
             cache_control,
             model=str(payload.get("model") or ""),
+            tail_tokens=upstream.get("anthropic_cache_tail_tokens"),
         )
 
     def _anthropic_cache_control(self, upstream: dict[str, Any]) -> dict[str, str]:
