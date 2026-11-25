@@ -98,7 +98,7 @@ def installation(root):
                  'deploy/secrets/api-token', 'deploy/installation.json', 'my-notes.txt'):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b'keep me')
+        path.write_bytes(b'{"backend":"docker"}' if name == 'deploy/installation.json' else b'keep me')
     return files
 
 
