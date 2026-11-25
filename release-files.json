@@ -624,5 +624,8 @@
   "tests/test_narrative_delete.py",
   "tests/test_narrative_rename.py",
   "web/tests/narrative-errors.test.mjs",
-  "web/tests/narrative-flow.test.mjs"
+  "web/tests/narrative-flow.test.mjs",
+  "docs/cache-repair-codex-handoff.md",
+  "tests/test_anthropic_cache_layout.py",
+  "tests/test_anthropic_thinking_compat.py"
 ]
