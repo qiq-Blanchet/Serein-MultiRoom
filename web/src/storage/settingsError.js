@@ -21,6 +21,7 @@ const FIELD_LABELS = {
   api_key_env: "密钥环境变量名", model: "模型名称", upstream_model: "上游模型名称",
   name: "名称", label: "显示名称", id: "标识", dimension: "向量维度", protocol: "接口格式",
   prompt_cache: "提示词缓存策略", prompt_cache_retention: "缓存保留时间",
+  anthropic_system_layout: "系统消息转换策略", anthropic_cache_tail_tokens: "明确断点尾部预留 Token",
   default_model: "默认模型", query_instruction: "查询指令", document_instruction: "文档指令",
   anthropic_version: "Anthropic API 版本", anthropic_beta: "Anthropic Beta 选项",
   daily_probability: "每日做梦概率", main_prompt: "主模型 Prompt",

@@ -77,6 +77,8 @@ def grouped_upstreams(state):
         connection = {key:value for key,value in model.items() if key not in (*route_keys,'model')}
         group = next((item for item in groups if all(item.get(key, '') == connection.get(key, '')
                      for key in ('base_url','api_key','protocol','prompt_cache','prompt_cache_retention'))
+                     and all(item.get(key, default) == connection.get(key, default) for key, default in
+                             (('anthropic_system_layout', 'legacy'), ('anthropic_cache_tail_tokens', 4000)))
                      and not item.get('api_key_env')), None)
         if group is None:
             host = urlsplit(model['base_url']).hostname or '上游'

@@ -33,7 +33,7 @@ export function UpstreamSettings({upstreams,modelIds=[],assignments={},onChange,
         placeholder={upstream.api_key_configured?"已配置；留空保留":"本地无认证上游可留空"}
         onChange={event=>edit(upstream.id,{api_key:event.target.value,...(event.target.value?{clear_key:false}:{})})} /></label>
       {upstream.api_key_configured && <label className="settings-toggle"><span>删除已保存的密钥</span><input type="checkbox" role="switch" checked={upstream.clear_key || false} onChange={event=>edit(upstream.id,{clear_key:event.target.checked})} /></label>}
-      <label className="settings-field"><span>接口格式</span><select value={upstream.protocol} onChange={event=>edit(upstream.id,{protocol:event.target.value,opencode_go_session:false,prompt_cache:"",prompt_cache_retention:""})}>
+      <label className="settings-field"><span>接口格式</span><select value={upstream.protocol} onChange={event=>edit(upstream.id,{protocol:event.target.value,opencode_go_session:false,prompt_cache:"",prompt_cache_retention:"",anthropic_system_layout:"legacy",anthropic_cache_tail_tokens:4000})}>
         <option value="openai">Chat Completions / Embeddings / Rerank</option><option value="anthropic">Anthropic Messages</option></select></label>
       {upstream.protocol === "openai" && upstream.base_url?.trim().replace(/\/$/, '') === goBaseUrl &&
         <label className="settings-toggle"><span>发送 OpenCode Go 会话标识
@@ -47,6 +47,14 @@ export function UpstreamSettings({upstreams,modelIds=[],assignments={},onChange,
           <option value="">跟随服务商默认值</option>{upstream.protocol==="openai" && <option value="openai">Prompt cache key</option>}<option value="anthropic">Anthropic 自动缓存</option>{upstream.protocol==="anthropic" && <option value="anthropic-explicit">Anthropic 明确断点</option>}</select></label>
         <label className="settings-field"><span>缓存时长</span><select value={upstream.prompt_cache_retention || ""} onChange={event=>edit(upstream.id,{prompt_cache_retention:event.target.value})}>
           <option value="">默认</option>{upstream.prompt_cache==="openai"?<><option value="in-memory">in-memory</option><option value="24h">24 小时</option></>:upstream.prompt_cache?<><option value="5m">5 分钟</option><option value="1h">1 小时</option></>:null}</select></label>
+        {upstream.protocol==="anthropic" && <>
+          <label className="settings-field"><span>系统消息转换策略</span><select value={upstream.anthropic_system_layout || "legacy"} onChange={event=>edit(upstream.id,{anthropic_system_layout:event.target.value})}>
+            <option value="legacy">原始模式（全部 system 合并）</option>
+            <option value="host-data">宿主数据兼容（Orbis 标识）</option>
+            <option value="late-system">动态上下文优化（宿主数据及聊天中途 system）</option>
+          </select><small>优化模式将紧邻用户消息的中途 system 作为用户上下文传递，不再具有原生系统指令权限；顶部系统指令仍保留。</small></label>
+          {upstream.prompt_cache==="anthropic-explicit" && <label className="settings-field"><span>明确断点尾部预留 Token</span><input type="number" min="0" max="100000" step="1" value={upstream.anthropic_cache_tail_tokens ?? 4000} onChange={event=>edit(upstream.id,{anthropic_cache_tail_tokens:event.target.value===""?4000:Math.max(0,Math.min(100000,Math.trunc(Number(event.target.value))))})} /><small>默认 4000；这是断点预留量，不是世界书或上下文长度上限。</small></label>}
+        </>}
         <label className="settings-field"><span>默认模型名（仅单上游时使用）</span><input value={upstream.default_model || ""} onChange={event=>edit(upstream.id,{default_model:event.target.value})} /></label>
       </details>
       <ModelDiscovery upstream={upstream} onAdd={names=>{
