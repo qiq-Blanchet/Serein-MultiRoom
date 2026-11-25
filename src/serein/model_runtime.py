@@ -99,85 +99,109 @@ ASSUMED_ANTHROPIC_MAX_TOKENS = 64000
 DEFAULT_ANTHROPIC_EFFORT = 'high'
 
 
+class ClaudeThinkingOptionsError(ValueError):
+    """Safe client-facing error; never include prompts or provider response bodies."""
+
+
 def _claude_thinking_family(model):
-    """Classify known Claude upstream IDs, not arbitrary Messages-compatible APIs."""
+    """Classify Claude generations, including provider-prefixed upstream IDs.
+
+    Avoid a release-by-release allowlist: 4.6+ and all numbered 5+ generations
+    use the same adaptive interface. A date suffix is not a minor version.
+    Unknown/older non-thinking IDs retain the original transport behavior.
+    """
     name = str(model.get('model') or '').lower()
-    if 'claude' not in name:
+    if re.search(r'\bclaude[-_. ]+mythos[-_. ]+preview\b', name):
+        return 'adaptive'
+    version = re.search(
+        r'\bclaude[-_. ]+(?:(?:opus|sonnet|haiku|fable|mythos)[-_. ]+)?'
+        r'(\d+)(?:[-_.](\d{1,2})(?!\d))?(?!\d)', name)
+    if not version:
         return None
-    if re.search(r'(?<!\d)4[-.]6(?!\d)', name):
+    major, minor = int(version[1]), int(version[2] or 0)
+    if major >= 5 or (major == 4 and minor >= 7):
+        return 'adaptive'
+    if (major, minor) == (4, 6):
         return 'adaptive-46'
-    if re.search(r'(?<!\d)4[-.][78](?!\d)', name) or re.search(r'(?:^|[-_./ ])5(?:$|[-_./ ])', name):
-        return 'adaptive-new'
-    if re.search(r'(?<!\d)3[-.]7(?!\d)', name) or re.search(r'(?<!\d)4(?:[-.][015](?!\d)|$|-(?!\d))', name):
+    if major == 4 or (major, minor) == (3, 7):
         return 'extended'
     return None
 
 
 def anthropic_chat_defaults(model, payload):
-    """Translate Chat Completions reasoning controls on a chat request copy.
+    """Translate Chat Completions controls without changing explicit effort.
 
-    Explicit native thinking/output_config and output limits take precedence.
-    Do not silently disable thinking or reduce max_tokens on provider errors.
+    Native thinking/output_config and output limits take precedence.
+    Unsupported settings fail explicitly instead of silently downgrading.
     """
     if model.get('protocol') != 'anthropic':
         return payload
     family = _claude_thinking_family(model)
     if family is None:
         return payload
+    adaptive = family.startswith('adaptive')
     result = dict(payload)
     if result.get('max_tokens') is None and result.get('max_completion_tokens') is None:
         if result.get('max_output_tokens') is not None:
             result['max_tokens'] = result['max_output_tokens']
         else:
-            result['max_tokens'] = ASSUMED_ANTHROPIC_MAX_TOKENS if family.startswith('adaptive') else 16384
+            result['max_tokens'] = ASSUMED_ANTHROPIC_MAX_TOKENS if adaptive else 16384
     limit = result.get('max_tokens')
     if limit is None:
         limit = result.get('max_completion_tokens')
-    # Validation of caller-supplied native budgets remains with the provider.
+
     generic = result.get('reasoning_effort')
     if generic is None and isinstance(result.get('reasoning'), dict):
         generic = result['reasoning'].get('effort')
         if generic is None and result['reasoning'].get('enabled') is False:
             generic = 'none'
     effort = str(generic or '').lower().strip()
-    effort = {'minimal':'low', 'extra_high':'xhigh', 'extra-high':'xhigh',
+    # Only spelling aliases, never a change in thinking intensity.
+    effort = {'extra_high':'xhigh', 'extra-high':'xhigh',
               'very_high':'xhigh', 'very-high':'xhigh', 'off':'none'}.get(effort, effort)
+    output = deepcopy(result.get('output_config')) if isinstance(result.get('output_config'), dict) else {}
+    native_effort = output.get('effort')
+    selected = native_effort if native_effort is not None else effort
+    if selected == 'xhigh' and family == 'adaptive-46':
+        raise ClaudeThinkingOptionsError('Claude 4.6 does not support xhigh effort. Choose high or max, or use a model that supports xhigh.')
+    if family == 'extended' and selected in ('xhigh', 'max'):
+        raise ClaudeThinkingOptionsError('This legacy Claude generation does not support xhigh/max effort. Choose high or a newer Claude model.')
+
     disabled = effort == 'none' or (not effort and result.get('enable_thinking') is False)
-    explicit = isinstance(result.get('thinking'), dict)
-    thinking = deepcopy(result['thinking']) if explicit else None
+    thinking = deepcopy(result['thinking']) if isinstance(result.get('thinking'), dict) else None
     if thinking is None:
         if disabled:
             thinking = {'type':'disabled'}
-        elif family.startswith('adaptive'):
+        elif adaptive:
             thinking = {'type':'adaptive'}
-        elif type(limit) is int and limit > 1024:
-            # Legacy manual thinking requires at least 1024 tokens and a
-            # strictly greater total output limit.
-            target = {'low':2048, 'medium':4096, 'high':8192,
-                      'xhigh':16384, 'max':16384}.get(effort, 4096)
+        else:
+            # Legacy thinking uses a token budget, not adaptive effort.
+            if type(limit) is not int or limit <= 1024:
+                raise ClaudeThinkingOptionsError('Legacy Claude thinking needs max_tokens greater than 1024. Increase max_tokens or disable thinking explicitly.')
+            if selected not in ('', 'auto', 'low', 'medium', 'high'):
+                raise ClaudeThinkingOptionsError('This legacy Claude generation uses thinking_budget. Choose low, medium or high, or supply a native thinking configuration.')
+            target = {'low':2048, 'medium':4096, 'high':8192}.get(selected, 4096)
             budget = result.get('thinking_budget')
             thinking = {'type':'enabled', 'budget_tokens': budget if budget is not None
                         else min(target, max(1024, limit - 1024))}
-    if thinking is not None:
-        if family == 'adaptive-new' and thinking.get('type') == 'adaptive':
-            # Newer Claude versions omit visible thinking by default.
-            thinking.setdefault('display', 'summarized')
-        result['thinking'] = thinking
-        if thinking.get('type') in {'enabled', 'adaptive', 'between_tools'}:
-            # Sampling controls conflict with active Claude thinking.
-            result.pop('temperature', None)
-            result.pop('top_p', None)
-            result.pop('top_k', None)
-    if family.startswith('adaptive') and thinking and thinking.get('type') == 'adaptive':
-        output = deepcopy(result.get('output_config')) if isinstance(result.get('output_config'), dict) else {}
+    if thinking.get('type') == 'adaptive':
+        # Supported across adaptive Claude generations; explicit omitted wins.
+        thinking.setdefault('display', 'summarized')
+    result['thinking'] = thinking
+    if thinking.get('type') in ('enabled', 'adaptive', 'between_tools'):
+        result.pop('temperature', None)
+        result.pop('top_p', None)
+        result.pop('top_k', None)
+    if adaptive:
         if 'effort' not in output:
-            selected = effort if effort in {'low','medium','high','xhigh','max'} else DEFAULT_ANTHROPIC_EFFORT
-            # 4.6 supports max but not xhigh. Translate only generic client
-            # effort; native output_config is never silently rewritten.
-            if family == 'adaptive-46' and selected == 'xhigh':
-                selected = 'max'
-            output['effort'] = selected
-        result['output_config'] = output
+            if effort not in ('', 'auto', 'none'):
+                # Forward the requested level unchanged. Future/new levels are
+                # validated by the actual provider rather than guessed here.
+                output['effort'] = effort
+            elif thinking.get('type') == 'adaptive':
+                output['effort'] = DEFAULT_ANTHROPIC_EFFORT
+        if output:
+            result['output_config'] = output
     return result
 
 

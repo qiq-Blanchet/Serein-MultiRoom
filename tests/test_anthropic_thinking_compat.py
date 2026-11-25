@@ -4,7 +4,7 @@ from copy import deepcopy
 import pytest
 
 from serein.model_runtime import (
-    AnthropicStream, anthropic_chat_defaults, normalize_response, request_for,
+    AnthropicStream, anthropic_chat_defaults, normalize_response, request_for, ClaudeThinkingOptionsError,
 )
 from serein.chat_context import ClientContext
 
@@ -28,16 +28,24 @@ def test_adaptive_default_and_generic_extra_high(name):
     model = {**MODEL, 'model': name}
     body = wire(model)
     assert body['max_tokens'] == 64000
-    assert body['thinking'] == {'type': 'adaptive'}
+    assert body['thinking'] == {'type': 'adaptive', 'display': 'summarized'}
     assert body['output_config'] == {'effort': 'high'}
-    assert wire(model, reasoning_effort='xhigh')['output_config']['effort'] == 'max'
+    with pytest.raises(ClaudeThinkingOptionsError, match='does not support xhigh'):
+        wire(model, reasoning_effort='xhigh')
+    assert wire(model, reasoning_effort='max')['output_config']['effort'] == 'max'
     assert wire(model, reasoning_effort='high')['output_config']['effort'] == 'high'
 
 
-def test_newer_claude_requests_visible_summary():
-    body = wire({**MODEL, 'model':'claude-opus-4-7'}, reasoning_effort='xhigh')
+@pytest.mark.parametrize('name', ['claude-opus-4-7', 'claude-opus-4-8', 'claude-opus-5',
+                                 'claude-opus-5-5', 'claude-sonnet-5.5', 'claude-haiku-5-5',
+                                 'claude-fable-5-2', 'claude-mythos-5-2',
+                                 'anthropic.claude-sonnet-5-5-v1:0', 'claude-opus-6-1'])
+def test_newer_claude_requests_visible_summary(name):
+    body = wire({**MODEL, 'model':name}, reasoning_effort='xhigh')
     assert body['thinking'] == {'type':'adaptive', 'display':'summarized'}
     assert body['output_config']['effort'] == 'xhigh'
+    assert body['max_tokens'] == 64000
+    assert wire({**MODEL, 'model':name}, reasoning_effort='max')['output_config']['effort'] == 'max'
     body = wire({**MODEL, 'model':'claude-opus-4-8'},
                 thinking={'type':'adaptive','display':'omitted'})
     assert body['thinking']['display'] == 'omitted'
@@ -62,7 +70,11 @@ def test_legacy_and_other_providers():
     body = wire({**MODEL, 'model':'claude-sonnet-4-5'}, max_tokens=2000, reasoning_effort='high')
     assert body['thinking'] == {'type':'enabled', 'budget_tokens':1024}
     assert body['max_tokens'] == 2000
-    assert 'thinking' not in wire({**MODEL, 'model':'claude-sonnet-4-5'}, max_tokens=1024)
+    with pytest.raises(ClaudeThinkingOptionsError, match='max_tokens greater'):
+        wire({**MODEL, 'model':'claude-sonnet-4-5'}, max_tokens=1024)
+    with pytest.raises(ClaudeThinkingOptionsError, match='does not support xhigh/max'):
+        wire({**MODEL, 'model':'claude-sonnet-4-5'}, reasoning_effort='xhigh')
+    assert wire({**MODEL, 'model':'claude-sonnet-4-20250514'})['thinking']['type'] == 'enabled'
     for model in ({**MODEL,'model':'deepseek-v4-pro'}, {**MODEL,'protocol':'openai'}):
         assert anthropic_chat_defaults(model, PAYLOAD) is PAYLOAD
     # Direct internal task requests do not receive chat-only default thinking.
