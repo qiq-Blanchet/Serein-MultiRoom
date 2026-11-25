@@ -66,18 +66,15 @@ def test_explicit_controls_win():
         'type':'enabled','budget_tokens':2048}
 
 
-def test_legacy_and_other_providers():
-    body = wire({**MODEL, 'model':'claude-sonnet-4-5'}, max_tokens=2000, reasoning_effort='high')
-    assert body['thinking'] == {'type':'enabled', 'budget_tokens':1024}
-    assert body['max_tokens'] == 2000
-    with pytest.raises(ClaudeThinkingOptionsError, match='max_tokens greater'):
-        wire({**MODEL, 'model':'claude-sonnet-4-5'}, max_tokens=1024)
-    with pytest.raises(ClaudeThinkingOptionsError, match='does not support xhigh/max'):
-        wire({**MODEL, 'model':'claude-sonnet-4-5'}, reasoning_effort='xhigh')
-    assert wire({**MODEL, 'model':'claude-sonnet-4-20250514'})['thinking']['type'] == 'enabled'
-    for model in ({**MODEL,'model':'deepseek-v4-pro'}, {**MODEL,'protocol':'openai'}):
+def test_pre_46_unknown_and_other_providers_keep_original_transport():
+    for model in ({**MODEL,'model':'claude-sonnet-4-5'},
+                  {**MODEL,'model':'claude-sonnet-4-20250514'},
+                  {**MODEL,'model':'claude-3-7-sonnet-20250219'},
+                  {**MODEL,'model':'hidden-alias'},
+                  {**MODEL,'model':'deepseek-v4-pro'},
+                  {**MODEL,'protocol':'openai'}):
         assert anthropic_chat_defaults(model, PAYLOAD) is PAYLOAD
-    # Direct internal task requests do not receive chat-only default thinking.
+    # Direct internal task requests do not receive chat-only defaults.
     body = request_for(MODEL, PAYLOAD)[2]
     assert 'thinking' not in body and body['max_tokens'] == 1024
 

@@ -108,7 +108,7 @@ def _claude_thinking_family(model):
 
     Avoid a release-by-release allowlist: 4.6+ and all numbered 5+ generations
     use the same adaptive interface. A date suffix is not a minor version.
-    Unknown/older non-thinking IDs retain the original transport behavior.
+    Pre-4.6 and unknown IDs retain the original transport behavior.
     """
     name = str(model.get('model') or '').lower()
     if re.search(r'\bclaude[-_. ]+mythos[-_. ]+preview\b', name):
@@ -123,8 +123,6 @@ def _claude_thinking_family(model):
         return 'adaptive'
     if (major, minor) == (4, 6):
         return 'adaptive-46'
-    if major == 4 or (major, minor) == (3, 7):
-        return 'extended'
     return None
 
 
@@ -139,16 +137,12 @@ def anthropic_chat_defaults(model, payload):
     family = _claude_thinking_family(model)
     if family is None:
         return payload
-    adaptive = family.startswith('adaptive')
     result = dict(payload)
     if result.get('max_tokens') is None and result.get('max_completion_tokens') is None:
         if result.get('max_output_tokens') is not None:
             result['max_tokens'] = result['max_output_tokens']
         else:
-            result['max_tokens'] = ASSUMED_ANTHROPIC_MAX_TOKENS if adaptive else 16384
-    limit = result.get('max_tokens')
-    if limit is None:
-        limit = result.get('max_completion_tokens')
+            result['max_tokens'] = ASSUMED_ANTHROPIC_MAX_TOKENS
 
     generic = result.get('reasoning_effort')
     if generic is None and isinstance(result.get('reasoning'), dict):
@@ -164,26 +158,11 @@ def anthropic_chat_defaults(model, payload):
     selected = native_effort if native_effort is not None else effort
     if selected == 'xhigh' and family == 'adaptive-46':
         raise ClaudeThinkingOptionsError('Claude 4.6 does not support xhigh effort. Choose high or max, or use a model that supports xhigh.')
-    if family == 'extended' and selected in ('xhigh', 'max'):
-        raise ClaudeThinkingOptionsError('This legacy Claude generation does not support xhigh/max effort. Choose high or a newer Claude model.')
 
     disabled = effort == 'none' or (not effort and result.get('enable_thinking') is False)
     thinking = deepcopy(result['thinking']) if isinstance(result.get('thinking'), dict) else None
     if thinking is None:
-        if disabled:
-            thinking = {'type':'disabled'}
-        elif adaptive:
-            thinking = {'type':'adaptive'}
-        else:
-            # Legacy thinking uses a token budget, not adaptive effort.
-            if type(limit) is not int or limit <= 1024:
-                raise ClaudeThinkingOptionsError('Legacy Claude thinking needs max_tokens greater than 1024. Increase max_tokens or disable thinking explicitly.')
-            if selected not in ('', 'auto', 'low', 'medium', 'high'):
-                raise ClaudeThinkingOptionsError('This legacy Claude generation uses thinking_budget. Choose low, medium or high, or supply a native thinking configuration.')
-            target = {'low':2048, 'medium':4096, 'high':8192}.get(selected, 4096)
-            budget = result.get('thinking_budget')
-            thinking = {'type':'enabled', 'budget_tokens': budget if budget is not None
-                        else min(target, max(1024, limit - 1024))}
+        thinking = {'type':'disabled' if disabled else 'adaptive'}
     if thinking.get('type') == 'adaptive':
         # Supported across adaptive Claude generations; explicit omitted wins.
         thinking.setdefault('display', 'summarized')
@@ -192,16 +171,15 @@ def anthropic_chat_defaults(model, payload):
         result.pop('temperature', None)
         result.pop('top_p', None)
         result.pop('top_k', None)
-    if adaptive:
-        if 'effort' not in output:
-            if effort not in ('', 'auto', 'none'):
-                # Forward the requested level unchanged. Future/new levels are
-                # validated by the actual provider rather than guessed here.
-                output['effort'] = effort
-            elif thinking.get('type') == 'adaptive':
-                output['effort'] = DEFAULT_ANTHROPIC_EFFORT
-        if output:
-            result['output_config'] = output
+    if 'effort' not in output:
+        if effort not in ('', 'auto', 'none'):
+            # Forward the requested level unchanged. Future/new levels are
+            # validated by the actual provider rather than guessed here.
+            output['effort'] = effort
+        elif thinking.get('type') == 'adaptive':
+            output['effort'] = DEFAULT_ANTHROPIC_EFFORT
+    if output:
+        result['output_config'] = output
     return result
 
 
