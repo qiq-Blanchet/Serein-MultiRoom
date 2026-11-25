@@ -4,6 +4,7 @@ from copy import deepcopy
 from time import monotonic
 import json
 import logging
+import re
 import time
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -93,6 +94,93 @@ def deepseek_tool_reasoning_compat(model, payload, *, window_id=''):
     return result, count
 
 
+# Chat-only defaults; internal Writer/Persona/embedding jobs keep their own budgets.
+ASSUMED_ANTHROPIC_MAX_TOKENS = 64000
+DEFAULT_ANTHROPIC_EFFORT = 'high'
+
+
+def _claude_thinking_family(model):
+    """Classify known Claude upstream IDs, not arbitrary Messages-compatible APIs."""
+    name = str(model.get('model') or '').lower()
+    if 'claude' not in name:
+        return None
+    if re.search(r'(?<!\d)4[-.]6(?!\d)', name):
+        return 'adaptive-46'
+    if re.search(r'(?<!\d)4[-.][78](?!\d)', name) or re.search(r'(?:^|[-_./ ])5(?:$|[-_./ ])', name):
+        return 'adaptive-new'
+    if re.search(r'(?<!\d)3[-.]7(?!\d)', name) or re.search(r'(?<!\d)4(?:[-.][015](?!\d)|$|-(?!\d))', name):
+        return 'extended'
+    return None
+
+
+def anthropic_chat_defaults(model, payload):
+    """Translate Chat Completions reasoning controls on a chat request copy.
+
+    Explicit native thinking/output_config and output limits take precedence.
+    Do not silently disable thinking or reduce max_tokens on provider errors.
+    """
+    if model.get('protocol') != 'anthropic':
+        return payload
+    family = _claude_thinking_family(model)
+    if family is None:
+        return payload
+    result = dict(payload)
+    if result.get('max_tokens') is None and result.get('max_completion_tokens') is None:
+        if result.get('max_output_tokens') is not None:
+            result['max_tokens'] = result['max_output_tokens']
+        else:
+            result['max_tokens'] = ASSUMED_ANTHROPIC_MAX_TOKENS if family.startswith('adaptive') else 16384
+    limit = result.get('max_tokens')
+    if limit is None:
+        limit = result.get('max_completion_tokens')
+    # Validation of caller-supplied native budgets remains with the provider.
+    generic = result.get('reasoning_effort')
+    if generic is None and isinstance(result.get('reasoning'), dict):
+        generic = result['reasoning'].get('effort')
+        if generic is None and result['reasoning'].get('enabled') is False:
+            generic = 'none'
+    effort = str(generic or '').lower().strip()
+    effort = {'minimal':'low', 'extra_high':'xhigh', 'extra-high':'xhigh',
+              'very_high':'xhigh', 'very-high':'xhigh', 'off':'none'}.get(effort, effort)
+    disabled = effort == 'none' or (not effort and result.get('enable_thinking') is False)
+    explicit = isinstance(result.get('thinking'), dict)
+    thinking = deepcopy(result['thinking']) if explicit else None
+    if thinking is None:
+        if disabled:
+            thinking = {'type':'disabled'}
+        elif family.startswith('adaptive'):
+            thinking = {'type':'adaptive'}
+        elif type(limit) is int and limit > 1024:
+            # Legacy manual thinking requires at least 1024 tokens and a
+            # strictly greater total output limit.
+            target = {'low':2048, 'medium':4096, 'high':8192,
+                      'xhigh':16384, 'max':16384}.get(effort, 4096)
+            budget = result.get('thinking_budget')
+            thinking = {'type':'enabled', 'budget_tokens': budget if budget is not None
+                        else min(target, max(1024, limit - 1024))}
+    if thinking is not None:
+        if family == 'adaptive-new' and thinking.get('type') == 'adaptive':
+            # Newer Claude versions omit visible thinking by default.
+            thinking.setdefault('display', 'summarized')
+        result['thinking'] = thinking
+        if thinking.get('type') in {'enabled', 'adaptive', 'between_tools'}:
+            # Sampling controls conflict with active Claude thinking.
+            result.pop('temperature', None)
+            result.pop('top_p', None)
+            result.pop('top_k', None)
+    if family.startswith('adaptive') and thinking and thinking.get('type') == 'adaptive':
+        output = deepcopy(result.get('output_config')) if isinstance(result.get('output_config'), dict) else {}
+        if 'effort' not in output:
+            selected = effort if effort in {'low','medium','high','xhigh','max'} else DEFAULT_ANTHROPIC_EFFORT
+            # 4.6 supports max but not xhigh. Translate only generic client
+            # effort; native output_config is never silently rewritten.
+            if family == 'adaptive-46' and selected == 'xhigh':
+                selected = 'max'
+            output['effort'] = selected
+        result['output_config'] = output
+    return result
+
+
 def request_for(model, payload, *, window_id='', go_session_id=None):
     adapter = ClientContext()
     payload = {**payload, 'model': model['model']}
@@ -102,6 +190,8 @@ def request_for(model, payload, *, window_id='', go_session_id=None):
         if isinstance(payload.get('thinking'), dict):
             payload['_serein_anthropic_thinking'] = payload['thinking']
         converted = adapter._anthropic_payload_for_upstream(payload, {'upstream': model, 'upstream_model': model['model']})
+        if isinstance(payload.get('output_config'), dict):
+            converted['output_config'] = deepcopy(payload['output_config'])
         if isinstance(payload.get('reasoning'), dict) and (
                 'deepseek' in str(model.get('base_url') or '').lower()
                 or 'deepseek' in str(model.get('model') or '').lower()):
@@ -183,6 +273,8 @@ class AnthropicStream:
             elif typ in ('thinking','redacted_thinking'):
                 detail=ClientContext._anthropic_thinking_block_to_reasoning_detail(block,index=index)
                 delta={'reasoning_details':[detail]} if detail else {}
+                if typ=='thinking' and block.get('thinking'):
+                    delta['reasoning_content']=block['thinking']
         elif kind=='content_block_delta':
             value=event.get('delta',{});typ=value.get('type')
             if typ=='text_delta':delta={'content':value.get('text','')}
@@ -190,6 +282,8 @@ class AnthropicStream:
             elif typ in ('thinking_delta','signature_delta'):
                 delta={'reasoning_details':[{'type':'reasoning.text','format':'anthropic-claude-v1','index':index,
                     **({'text':value.get('thinking','')} if typ=='thinking_delta' else {'signature':value.get('signature','')})}]}
+                if typ=='thinking_delta' and value.get('thinking'):
+                    delta['reasoning_content']=value['thinking']
         elif kind=='message_delta':
             finish={'tool_use':'tool_calls','max_tokens':'length'}.get(event.get('delta',{}).get('stop_reason'),'stop');usage=event.get('usage')
         else:return None

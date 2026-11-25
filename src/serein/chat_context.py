@@ -1602,6 +1602,7 @@ class ClientContext:
             reasoning_text = self._reasoning_text_from_details(reasoning_details)
             if reasoning_text:
                 message["reasoning"] = reasoning_text
+                message["reasoning_content"] = reasoning_text
         if tool_calls:
             message["tool_calls"] = tool_calls
         return message
@@ -1614,7 +1615,7 @@ class ClientContext:
             message["content"] += delta["content"]
         if isinstance(delta.get("reasoning_content"), str):
             message["reasoning_content"] += delta["reasoning_content"]
-        if isinstance(delta.get("reasoning"), str):
+        elif isinstance(delta.get("reasoning"), str):
             message["reasoning_content"] += delta["reasoning"]
         reasoning_details = delta.get("reasoning_details")
         if isinstance(reasoning_details, list):

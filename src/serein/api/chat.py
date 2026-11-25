@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from ..deployment import read_settings, task_model, chat_models, client_model_id
 from ..chat_context import ClientContext
 from ..model_runtime import request_for, AnthropicStream, complete, UpstreamError, safe_upstream_http_error
+from ..model_runtime import anthropic_chat_defaults
 from ..core.store import digest, encode, Conflict
 from .. import chat_resume
 from ..chat_observation import ChatObservation, recall_summary
@@ -355,6 +356,8 @@ def routes(settings, services, auth):
         headers_out['X-Serein-Resume'] = 'loaded' if resume_snapshot else 'none'
         headers_out['X-Serein-Observation-Id'] = str(observation.id or '')
         headers_out['X-Serein-Resume-Items'] = str(resume_items)
+        # Apply chat-only Claude defaults after recall/archive preparation.
+        body = anthropic_chat_defaults(model, body)
         if not body.get('stream'):
             try:
                 result = await complete(model,body,window_id=window_id,**upstream_session)
