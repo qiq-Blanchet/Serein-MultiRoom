@@ -26,6 +26,8 @@ services:
       dockerfile: deploy/Gateway.Dockerfile
       args:
         VITE_SEREIN_COMMIT: ${VITE_SEREIN_COMMIT:-}
+        VITE_SEREIN_REPOSITORY: ${VITE_SEREIN_REPOSITORY:-Yinglianchun/Serein}
+        VITE_SEREIN_BRANCH: ${VITE_SEREIN_BRANCH:-main}
     restart: unless-stopped
     depends_on:
       memory:

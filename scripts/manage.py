@@ -86,12 +86,21 @@ def build_commit():
     return ''
 
 
+def build_update_source():
+    # The frontend displays the source used at build time, never a silent
+    # hardcoded upstream when a custom branch supplied the running code.
+    spec=importlib.util.spec_from_file_location('upstream_source',ROOT/'scripts'/'upstream_update.py')
+    helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper)
+    source=helper.update_source(ROOT)
+    return {'VITE_SEREIN_REPOSITORY':source['repository'], 'VITE_SEREIN_BRANCH':source['branch']}
+
+
 def compose(*args,**kwargs):
     source=installation().get('legacy_source_root')
     host_source=source or str(DEPLOY/'runtime'/'legacy-input')
     return run(['docker','compose','-p',installation().get('compose_project','serein-public'),'--project-directory',str(DEPLOY),
         '-f',str(DEPLOY/'compose.yaml'),*args],env={**os.environ,'SEREIN_INSTALL_ROOT':str(ROOT),
-        **({'VITE_SEREIN_COMMIT':build_commit()} if args==('build','gateway') else {}),
+        **({'VITE_SEREIN_COMMIT':build_commit(), **build_update_source()} if args==('build','gateway') else {}),
         'SEREIN_LEGACY_SOURCE':host_source,'SEREIN_LEGACY_SOURCE_HOST':host_source,
         'SEREIN_LEGACY_SOURCE_CONFIGURED':'1' if source else '0'},**kwargs)
 
@@ -169,7 +178,7 @@ def build_runtime(*,backup=True):
         prefix=[shutil.which('node'),str(cli)]
     else:prefix=[npm]
     run([*prefix,'ci'],cwd=ROOT/'web')
-    run([*prefix,'run','build'],cwd=ROOT/'web',env={**os.environ,'VITE_SEREIN_COMMIT':build_commit()})
+    run([*prefix,'run','build'],cwd=ROOT/'web',env={**os.environ,'VITE_SEREIN_COMMIT':build_commit(),**build_update_source()})
 
 
 def backup_runtime():
@@ -630,7 +639,7 @@ def main():
         try:
             print(f'\n安装目录：{ROOT}\n实例数据：{DEPLOY / "runtime"}')
             choice=choose('Serein · 安装与维护',[
-                ('0','设置前端用户名／密码'),('1','拉取上游代码并重建' if (DEPLOY/'config.toml').is_file() else '安装 Serein（全新安装／旧库迁移）'),('2','重启服务'),('3','向量重建与清理'),('4','启动／停止／状态／日志'),('5','访问入口：本机／局域网／公网'),('6','更换 Gateway Key'),('7','网页旧库目录只读授权'),('8','旧边转换补救（早期版本未转换成功）'),('9','旧备份清理'),('10','历史数据补漏（梦境／窗影／日记／暗房）'),('11','旧 Scene 补 cues'),('12','故障排查（环境／配置／服务／日志）'),('q','退出')])
+                ('0','设置前端用户名／密码'),('1','拉取上游代码并重建' if (DEPLOY/'config.toml').is_file() else '安装 Serein（全新安装／旧库迁移）'),('2','重启服务'),('3','向量重建与清理'),('4','启动／停止／状态／日志'),('5','访问入口：本机／局域网／公网'),('6','更换 Gateway Key'),('7','网页旧库目录只读授权'),('8','旧边转换补救（早期版本未转换成功）'),('9','旧备份清理'),('10','历史数据补漏（梦境／窗影／日记／暗房）'),('11','旧 Scene 补 cues'),('12','故障排查（环境／配置／服务／日志）'),('13','设置更新来源（GitHub 仓库／分支）'),('q','退出')])
             if choice=='q':return
             if choice=='12':
                 doctor()
@@ -641,10 +650,11 @@ def main():
             with locks.exclusive_lock(DEPLOY/'runtime'/'installer.lock'):
                 if choice=='0':auth()
                 elif choice=='9':cleanup_backups()
-                elif choice=='1' and (DEPLOY/'config.toml').is_file():
+                elif choice=='13' or (choice=='1' and (DEPLOY/'config.toml').is_file()):
                     spec=importlib.util.spec_from_file_location('upstream_update',ROOT/'scripts'/'upstream_update.py')
                     helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper)
-                    if helper.run_update(sys.modules[__name__]):return
+                    if choice=='13':helper.configure_source(sys.modules[__name__])
+                    elif helper.run_update(sys.modules[__name__]):return
                 else:
                     if select_environment() is False:continue
                     ensure_tools()

@@ -1,4 +1,4 @@
-"""Pull the public main branch with Git and rebuild the existing installation."""
+"""Pull the selected public GitHub branch and rebuild the existing installation."""
 import hashlib
 import json
 import os
@@ -35,14 +35,71 @@ def git(*args):
         raise ValueError('Git 拉取未完成：' + detail) from exc
 
 
-def latest_commit():
-    ref = 'refs/heads/' + BRANCH
-    rows = git('ls-remote', '--exit-code', REMOTE, ref).splitlines()
+def validate_source(repository, branch):
+    if not isinstance(repository, str) or not re.fullmatch(
+            r'[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}', repository):
+        raise ValueError('更新仓库必须为 GitHub 的 owner/repo 格式')
+    if repository.split('/')[1] in ('.', '..') or repository.endswith('.git'):
+        raise ValueError('更新仓库请输入 owner/repo，不要加 .git')
+    if not isinstance(branch, str) or not branch or len(branch) > 200 or branch.startswith('-'):
+        raise ValueError('更新分支名称无效')
+    git('check-ref-format', 'refs/heads/' + branch)
+    return {'repository': repository, 'branch': branch}
+
+
+def update_source(root):
+    path = Path(root) / 'deploy' / 'installation.json'
+    record = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    if not isinstance(record, dict):
+        raise ValueError('安装记录格式无效')
+    source = record.get('update_source')
+    if source is None:
+        return {'repository': REPOSITORY, 'branch': BRANCH}
+    if not isinstance(source, dict) or set(source) != {'repository', 'branch'}:
+        raise ValueError('更新来源配置格式无效')
+    return validate_source(source['repository'], source['branch'])
+
+
+def configure_source(manager):
+    root = Path(manager.ROOT)
+    path = root / 'deploy' / 'installation.json'
+    if not (root / 'deploy' / 'config.toml').is_file():
+        raise ValueError('请先部署当前实例')
+    current = update_source(root)
+    print(f"当前更新来源：{current['repository']} @ {current['branch']}")
+    choice = manager.choose('设置更新来源', [('1', '自定义公开 GitHub 仓库和分支'),
+        ('0', '恢复原作者 main（下一次更新可能移除自定义功能）')], back=True)
+    if choice == 'r':
+        return False
+    if choice == '0':
+        source = {'repository': REPOSITORY, 'branch': BRANCH}
+    else:
+        source = validate_source(manager.ask('GitHub 仓库 owner/repo', current['repository']),
+                                 manager.ask('分支名称', current['branch']))
+    # Confirm that the public branch exists before persisting the selection.
+    remote = 'https://github.com/' + source['repository'] + '.git'
+    commit = latest_commit(remote, source['branch'])
+    print(f"目标：{source['repository']} @ {source['branch']}，提交 {commit[:12]}")
+    print('请仅选择可信源码。更新时会执行该仓库的构建脚本；设置本身不停止服务。')
+    if not manager.confirm('保存更新来源'):
+        return False
+    record = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {'backend': 'docker'}
+    record['update_source'] = source
+    manager.private_file(path, json.dumps(record, ensure_ascii=False))
+    print('更新来源已保存；选择菜单 1 才会实际更新。')
+    return True
+
+
+def latest_commit(remote=None, branch=None):
+    remote = REMOTE if remote is None else remote
+    branch = BRANCH if branch is None else branch
+    ref = 'refs/heads/' + branch
+    rows = git('ls-remote', '--exit-code', remote, ref).splitlines()
     for row in rows:
         parts = row.split()
         if len(parts) == 2 and parts[1] == ref and re.fullmatch(r'[0-9a-f]{40}', parts[0]):
             return parts[0]
-    raise ValueError('无法确定上游 main 的提交，未开始更新')
+    raise ValueError('无法确定所选分支的提交，未开始更新')
 
 
 def safe_name(name):
@@ -86,14 +143,14 @@ def manifest(content):
     return names
 
 
-def prepare(commit, folder):
+def prepare(commit, folder, remote=None):
     if not re.fullmatch(r'[0-9a-f]{40}', commit or ''):
         raise ValueError('上游提交编号无效')
     staged = Path(folder) / 'source'
     git('init', '--quiet', '--template=', staged)
     # A fresh shallow fetch also works for extracted installs and rewritten
     # public history. Never merge old checkout history into the running source.
-    git('-C', staged, '-c', 'fetch.fsckObjects=true', 'fetch', '--quiet', '--depth=1', REMOTE, commit)
+    git('-C', staged, '-c', 'fetch.fsckObjects=true', 'fetch', '--quiet', '--depth=1', REMOTE if remote is None else remote, commit)
     git('-C', staged, '-c', 'core.autocrlf=false', 'checkout', '--quiet', '--detach', 'FETCH_HEAD')
     if git('-C', staged, 'rev-parse', 'HEAD') != commit:
         raise ValueError('拉取的代码与选定提交不一致')
@@ -233,27 +290,31 @@ def run_update(manager):
     root = Path(manager.ROOT).resolve()
     if not (root / 'deploy' / 'config.toml').is_file():
         raise ValueError('请先部署当前实例，再检查上游更新')
-    commit = latest_commit()
+    source = update_source(root)
+    custom = source != {'repository': REPOSITORY, 'branch': BRANCH}
+    remote = 'https://github.com/' + source['repository'] + '.git' if custom else None
+    commit = latest_commit(remote, source['branch']) if custom else latest_commit()
+    label = source['repository'] + ' @ ' + source['branch']
     state_path = root / 'deploy' / 'update-state.json'
     previous = json.loads(state_path.read_text()) if state_path.exists() else {}
     current = previous.get('commit', '')
-    print(f'当前提交：{current[:12] if current else "尚未记录（首次接入 Git 更新）"}；main 最新：{commit[:12]}')
+    print(f'当前提交：{current[:12] if current else "尚未记录（首次接入 Git 更新）"}；{label} 最新：{commit[:12]}')
     if current == commit and previous.get('phase') == 'complete':
         if previous.get('source_hashes') != source_hashes(root):
             raise ValueError('源码在上次更新后被修改，请先保存；未覆盖本地源码')
-        print('当前已是 main 最新提交，无须重复拉取和构建。')
+        print('当前已是所选来源最新提交，无须重复拉取和构建。')
         return False
-    choice = manager.choose('拉取 main 代码并重建', [('1', '先备份再更新（默认）'),
+    choice = manager.choose('拉取 ' + label + ' 代码并重建', [('1', '先备份再更新（默认）'),
                             ('0', '跳过数据备份直接更新')], default='1', back=True)
     if choice == 'r':
         return False
     manager.ensure_tools()
-    print('用 Git 拉取 main 代码；这一阶段保持当前服务运行。', flush=True)
+    print('用 Git 拉取 ' + label + '；这一阶段保持当前服务运行。', flush=True)
     with tempfile.TemporaryDirectory(prefix='serein-update-') as temporary:
-        staged, names = prepare(commit, temporary)
+        staged, names = prepare(commit, temporary, remote) if custom else prepare(commit, temporary)
         all_names, obsolete = plan_files(root, names, staged)
         backup = backup_sources(root, all_names)
-        state = {'commit': commit, 'branch': BRANCH, 'repository': REPOSITORY, 'source_backup': str(backup)}
+        state = {'commit': commit, 'branch': source['branch'], 'repository': source['repository'], 'source_backup': str(backup)}
         def record(phase):
             state['phase'] = phase
             manager.private_file(state_path, json.dumps({**state, 'source_hashes': source_hashes(root)}))
@@ -283,7 +344,7 @@ def run_update(manager):
             print('更新未完成。源码备份：' + str(backup) + '；数据备份（如选择）在 deploy/backups。')
             print('请查看错误后重试更新；构建失败不会自动启动半更新服务。', flush=True)
             raise
-    print('上游更新完成：main @ ' + commit[:12] + '。重新输入 se 可打开新版管理菜单。')
+    print('上游更新完成：' + label + ' @ ' + commit[:12] + '。重新输入 se 可打开新版管理菜单。')
     return True
 
 

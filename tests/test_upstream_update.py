@@ -330,3 +330,60 @@ def test_bootstrap_does_not_update_if_another_installer_is_running(monkeypatch, 
     monkeypatch.setattr(module, 'run_update', lambda manager: pytest.fail('Cannot run two installers'))
     with exclusive_lock(tmp_path / 'deploy/runtime/installer.lock'):
         assert module.main(['--root', str(tmp_path)]) == 1
+
+
+def test_custom_update_source_is_persistent_and_validated(monkeypatch, tmp_path):
+    module = updater()
+    installation(tmp_path)
+    path = tmp_path / 'deploy/installation.json'
+    path.write_text(json.dumps({'backend':'docker','compose_project':'same-project'}))
+    calls = []
+    def git(*args):
+        calls.append(args)
+        if args[0] == 'ls-remote':
+            return 'a' * 40 + '\trefs/heads/feature/cache'
+        return ''
+    monkeypatch.setattr(module, 'git', git)
+    answers = iter(['owner/repo', 'feature/cache'])
+    manager = types.SimpleNamespace(ROOT=tmp_path, choose=lambda *a, **k:'1',
+        ask=lambda *a:next(answers), confirm=lambda *a:True,
+        private_file=lambda p,s:p.write_text(s))
+    assert module.configure_source(manager)
+    assert module.update_source(tmp_path) == {'repository':'owner/repo','branch':'feature/cache'}
+    record = json.loads(path.read_text())
+    assert record['compose_project'] == 'same-project'
+    assert ('ls-remote','--exit-code','https://github.com/owner/repo.git','refs/heads/feature/cache') in calls
+    for repo, branch in [('https://evil.example/x','main'),('owner/repo','-bad'),('owner/..','main')]:
+        with pytest.raises(ValueError):
+            module.validate_source(repo,branch)
+
+
+def test_custom_branch_update_uses_same_remote_and_pins_commit(monkeypatch,tmp_path):
+    module = updater()
+    installation(tmp_path)
+    commit = upstream(module,tmp_path,extra={'README.md':b'fork source'})
+    local_remote = module.REMOTE
+    (tmp_path/'deploy/installation.json').write_text(json.dumps({
+        'backend':'docker','update_source':{'repository':'owner/repo','branch':'cache-repair'}}))
+    calls=[]
+    real_prepare=module.prepare
+    def latest(remote,branch):
+        calls.append((remote,branch))
+        return commit
+    def prepare(sha,folder,remote):
+        calls.append((sha,remote))
+        return real_prepare(sha,folder,local_remote)
+    monkeypatch.setattr(module,'latest_commit',latest)
+    monkeypatch.setattr(module,'prepare',prepare)
+    manager=types.SimpleNamespace(ROOT=tmp_path,choose=lambda *a,**k:'1',ensure_tools=lambda:None,
+        service_action=lambda a:None,private_file=lambda p,s:p.write_text(s))
+    fresh=types.SimpleNamespace(ensure_tools=lambda:None,build_runtime=lambda **k:None,
+        service_action=lambda a:None,check_memory=lambda:None)
+    monkeypatch.setattr(module,'load_manager',lambda r:fresh)
+    monkeypatch.setattr(module,'backup_runtime',lambda *a:None)
+    assert module.run_update(manager)
+    assert calls == [('https://github.com/owner/repo.git','cache-repair'),
+                     (commit,'https://github.com/owner/repo.git')]
+    state=json.loads((tmp_path/'deploy/update-state.json').read_text())
+    assert state['repository']=='owner/repo' and state['branch']=='cache-repair'
+    assert (tmp_path/'deploy/runtime/serein.db').read_bytes()==b'keep me'
