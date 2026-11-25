@@ -224,6 +224,43 @@ def request_for(model, payload, *, window_id='', go_session_id=None):
     return model['base_url'] + '/chat/completions', headers, payload
 
 
+def _usage_count(value):
+    # Missing and explicitly zero are different; don't invent measurements.
+    return value if type(value) is int and value >= 0 else None
+
+
+def normalize_anthropic_usage(usage):
+    """Preserve provider usage and add Chat Completions-compatible counters.
+
+    Anthropic input_tokens excludes both cache reads and cache writes.
+    output_tokens already includes thinking; never add it a second time.
+    """
+    if not isinstance(usage, dict):
+        return {}
+    normalized = deepcopy(usage)
+    fresh = _usage_count(usage.get('input_tokens'))
+    read = _usage_count(usage.get('cache_read_input_tokens'))
+    write = _usage_count(usage.get('cache_creation_input_tokens'))
+    output = _usage_count(usage.get('output_tokens'))
+    if fresh is not None:
+        normalized['prompt_tokens'] = fresh + (read or 0) + (write or 0)
+    if output is not None:
+        normalized['completion_tokens'] = output
+    if 'prompt_tokens' in normalized and 'completion_tokens' in normalized:
+        normalized['total_tokens'] = normalized['prompt_tokens'] + normalized['completion_tokens']
+    if read is not None:
+        normalized['prompt_tokens_details'] = {
+            **(normalized.get('prompt_tokens_details') or {}), 'cached_tokens': read}
+    # Preserve the provider's optional thinking count, if actually reported.
+    details = usage.get('output_tokens_details')
+    if isinstance(details, dict):
+        thinking = _usage_count(details.get('thinking_tokens'))
+        if thinking is not None:
+            normalized['completion_tokens_details'] = {
+                **(normalized.get('completion_tokens_details') or {}), 'reasoning_tokens': thinking}
+    return normalized
+
+
 def normalize_response(model, result):
     if model.get('protocol') != 'anthropic':
         return result
@@ -234,10 +271,7 @@ def normalize_response(model, result):
     usage = result.get('usage', {})
     return {'id':result.get('id',''), 'object':'chat.completion', 'created':int(time.time()), 'model':model['model'],
             'choices':[{'index':0,'message':message,'finish_reason':reason}],
-            'usage': {'prompt_tokens':usage.get('input_tokens',0), 'completion_tokens':usage.get('output_tokens',0),
-                      'total_tokens':usage.get('input_tokens',0)+usage.get('output_tokens',0),
-                      'cache_read_input_tokens':usage.get('cache_read_input_tokens',0),
-                      'cache_creation_input_tokens':usage.get('cache_creation_input_tokens',0)}}
+            'usage': normalize_anthropic_usage(usage)}
 
 
 async def complete(model, payload, *, window_id='', go_session_id=None):
@@ -258,6 +292,7 @@ async def complete(model, payload, *, window_id='', go_session_id=None):
 class AnthropicStream:
     def __init__(self, model):
         self.model=model; self.identifier=''; self.tools={}; self.next_tool=0
+        self.usage = {}
 
     def convert(self, event):
         kind=event.get('type'); delta={}; finish=None; usage=None
@@ -291,7 +326,19 @@ class AnthropicStream:
         else:return None
         result={'id':self.identifier,'object':'chat.completion.chunk','created':int(time.time()),'model':self.model,
                 'choices':[{'index':0,'delta':delta,'finish_reason':finish}]}
-        if usage is not None:result['usage']=usage
+        if isinstance(usage, dict):
+            # message_delta counters are cumulative, not incremental. Keep
+            # fields from message_start when a later event omits them.
+            if kind == 'message_start':
+                self.usage = {}
+            for key, value in usage.items():
+                if value is None:
+                    continue
+                if isinstance(value, dict) and isinstance(self.usage.get(key), dict):
+                    self.usage[key] = {**self.usage[key], **deepcopy(value)}
+                else:
+                    self.usage[key] = deepcopy(value)
+            result['usage'] = normalize_anthropic_usage(self.usage)
         return result
 
 

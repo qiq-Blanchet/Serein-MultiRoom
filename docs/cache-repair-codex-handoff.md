@@ -80,7 +80,7 @@
 - 核查 Serein 自己的稳定/动态记忆、时钟和 tool continuation snapshot/replay，不应重复注入或改变旧时间。
 - 核查动态世界书从第二轮到第三轮可能消失/变化，曾带世界书的上一 user 前缀不一定还能命中；不能声称整段历史永远稳定。确认 4000 对大量动态内容的效果，检查断点位置、20-block lookback、最小 token 阈值、最多 4 个断点、TTL、缓存块选择（尤其 thinking/tool_use），并验证同一工具续轮。
 - 配置保存/读取/旧分组/模板导入/切换协议/网页持久化，以及 OpenAI 透传行为不变。
-- 验证 usage 统计：Anthropic input_tokens 通常只包含未缓存输入，真实输入总量 = input_tokens + cache_creation_input_tokens + cache_read_input_tokens；实际命中率 = cache_read_input_tokens / 输入总量。当前 stream 和 nonstream 的归一化统计尚未专门修复，核对客户端读法，不把 UI 显示当作真实命中。
+- 验证 usage 统计：Anthropic input_tokens 通常只包含未缓存输入，真实输入总量 = input_tokens + cache_creation_input_tokens + cache_read_input_tokens；实际命中率 = cache_read_input_tokens / 输入总量。后续补丁已在 model_runtime.py 增加 normalize_anthropic_usage：流式按累计字段合并 message_start/message_delta，非流式共用转换，prompt_tokens 为三类输入之和，prompt_tokens_details.cached_tokens 为缓存读取量；原始缓存写入字段保留。缺失缓存读数不可伪造为 0。若上游报告 output_tokens_details.thinking_tokens，则映射 completion_tokens_details.reasoning_tokens（不重复计入输出总量）。请核对 Orbis/Operit 实际显示、工具多轮统计、原有断言及第三方上游字段差异，不把 UI 显示当作真实命中。
 
 ### 2.2 Thinking 与 API
 
@@ -103,7 +103,7 @@
 
 ```sh
 python -m pip install -c constraints-runtime.txt -e '.[test,http,embedding,mcp,background]'
-python -m pytest -q tests/test_anthropic_cache_layout.py tests/test_anthropic_thinking_compat.py
+python -m pytest -q tests/test_anthropic_cache_layout.py tests/test_anthropic_thinking_compat.py tests/test_anthropic_usage_compat.py
 python -m pytest -q tests/test_upstream_update.py tests/test_installer_menu.py tests/test_installer_doctor.py tests/test_upstream_catalog.py tests/test_public_settings.py
 python -m pytest -q
 ```
