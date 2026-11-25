@@ -50,6 +50,8 @@ class ModelConnection(BaseModel):
     protocol: Literal['openai', 'anthropic'] = 'openai'
     prompt_cache: Literal['', 'openai', 'anthropic', 'anthropic-explicit'] = ''
     prompt_cache_retention: Literal['', 'in-memory', '24h', '5m', '1h'] = ''
+    anthropic_system_layout: Literal['legacy', 'host-data', 'late-system'] = 'legacy'
+    anthropic_cache_tail_tokens: int = Field(default=4000, ge=0, le=100000, strict=True)
     _endpoint = field_validator('base_url')(api_base)
 
     @field_validator('prompt_cache', mode='before')
@@ -63,6 +65,8 @@ class ModelConnection(BaseModel):
             raise ValueError('Explicit Anthropic cache breakpoints require the Messages format')
         if self.protocol == 'anthropic' and self.prompt_cache == 'openai':
             raise ValueError('Prompt cache key requires the Chat Completions format')
+        if self.protocol != 'anthropic' and (self.anthropic_system_layout != 'legacy' or self.anthropic_cache_tail_tokens != 4000):
+            raise ValueError('Anthropic context layout and cache tail require the Messages format')
         allowed = {'', 'in-memory', '24h'} if self.prompt_cache == 'openai' else {'', '5m', '1h'} if self.prompt_cache else {''}
         if self.prompt_cache_retention not in allowed:
             raise ValueError('Cache retention does not match the selected cache strategy')
