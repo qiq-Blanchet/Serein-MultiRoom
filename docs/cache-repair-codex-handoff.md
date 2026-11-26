@@ -11,7 +11,7 @@
 - 用户主要使用 Orbis / Operit 经 Serein 的 OpenAI Chat Completions 入口访问 Anthropic Messages 上游，使用 Claude 4.6 及之后的模型，经常用 high / xhigh；不要求维护 4.6 之前的 Thinking 特殊兼容。
 - VPS 现有安装据用户描述为 `/opt/Serein`，运行原作者版本并含小玑在 VPS 上手动打的旧 Thinking 补丁。实际安装目录、版本、部署方式、挂载和补丁尚未现场核对。
 - VPS 可用资源：用户报告内存仅 1 GB 多，硬盘剩余 20 GB 多。不要把该报告当成实时检测；生产构建必须分步、限并发，先检查磁盘、内存和 swap。
-- **当前实现已提交，未实际执行新增 pytest、前端构建、完整回归或真实 API A/B 测试；未修改生产服务器、数据库或客户端。先审查并测试，再提出迁移方案。**
+- **缓存/Thinking/用量/更新器的全部回归和前端构建仍需核实，真实 API A/B 未测；OAuth CSP 补丁已在本地空库执行接口及 Chromium 回归。未修改生产服务器、数据库或客户端。先审查并测试，再提出迁移方案。**
 - 遵守根目录 AGENTS.md：开发审查只用空库和合成 fixture；不自行探测/连接私人部署。生产迁移、停止服务、调用付费 API、恢复数据须由用户明确授权并在已知的 VPS 上执行。避免将真实聊天、记忆、密钥、签名及原始上游请求写入测试、Git 或公开日志。
 
 ## 1. 已实现的变更
@@ -69,6 +69,15 @@
 - `docs/deployment-guide.md`：说明菜单 13 和更新来源。
 - 只支持公开 GitHub 分支，不承诺私有仓库认证；任意第三方源码具有执行权限，必须用户信任并确认。切到不含该特性的原作者分支可能使菜单 13 消失。
 
+### 1.4 MCP OAuth 浏览器授权回调 CSP 修复
+
+- 用户截图：输入 Gateway Key 并确认后，`POST /authorize` 返回 303，但 Chromium 控制台报 `form-action 'self'`，阻止跨 origin 的 OAuth 回调。原限制由 `src/serein/api/oauth.py` 的 GET 授权页本身设置；`web/server/gateway.mjs` 原样转发该头。
+- `src/serein/api/oauth.py`：仅在授权页面把已通过动态注册、完整 `redirect_uri` 精确匹配及 HTTPS/loopback 验证的当前回调 origin 加入 `form-action 'self'`（仅 scheme/host/port，不加入其他已注册地址、不开放 `*` 或整个 `https:`）。拒绝非法 host、通配符、CSP 分隔符、反斜杠、空白/控制字符和非法端口；国际域名使用 ASCII Punycode URI。POST 仍提交到本站 `/authorize`，重新验证完整回调、Gateway Key、PKCE、resource 等，正常成功仍返回 303，仅将 code/state 附加至原回调；不把 Gateway Key 发给外部客户端。
+- Chromium 不接受 IPv6 字面地址的 CSP host-source；对已合法注册的 IPv6 回调保持授权页 `form-action 'self'`，成功 POST 后返回无脚本的 200 完成页自动 GET 跳转，附手动继续链接。回调不匹配或 Key 错误时仍拒绝，不产生成功页面。其他安全策略（default-src/base-uri/frame-ancestors、no-store、no-referrer、nosniff）、token 轮换、静态 Bearer、数据库 schema 不变。
+- `tests/test_mcp_oauth.py`：新增实际响应头和非法 URI 回归，并提供可选真实 Chromium 测试，使用空库、合成 Key、两个不同 origin 的 loopback 端口（HTTP IPv4/IPv6、HTTPS 本地自签证书），检验真实提交、回调 GET、不泄露 Key、state 和 PKCE code 换 token。普通 pytest 不依赖浏览器；需要时另行安装 Playwright 并指定 Chromium 路径（见 2.4）。
+- 2026-11-26 本地使用 Chromium 158 实测：旧 HEAD `c11e7b9` 的 HTTPS 回调复现原截图 `form-action 'self'` 浏览器拦截；新实现 `SEREIN_TEST_CHROMIUM=... python -m pytest -q tests/test_mcp_oauth.py tests/test_http_mcp.py tests/test_gateway_contract.py` 为 **44 passed**（含三个真实浏览器用例）。这不是实际生产 OAuth 已通过的证明。
+- 生产反代若另外设置 CSP（含通过多个 CSP 头共同生效），仍可能拒绝跳转。升级后对照浏览器 GET `/authorize` 最终响应头及上游直连/反代响应，确认没有额外冲突的 `form-action 'self'`；只对授权路由消除重复/冲突策略，不删除全站 CSP、不禁用浏览器安全机制、不放宽 HTTPS 或回调精确匹配。用户实际 HTTPS 部署与客户端还需要授权后实测。
+
 ## 2. Codex 必做审查与验证
 
 先读取 AGENTS.md 和本分支 diff，确认这次只改上述范围。对照当前 Anthropic 官方 Messages / adaptive thinking / effort / prompt caching 文档及实际供应商模型能力，尤其 4.6/5.5、display、xhigh、max_tokens、工具调用与 thinking 签名。不要把模型名推断当成能力保证。
@@ -96,6 +105,7 @@
 - 验证 update-state.json 的实际提交/仓库/分支、installation.json 中原 compose_project 等字段、密钥/数据库保持不变；确认切换来源后网页版本检查与下次构建一致。
 - 重点检查低内存构建路径仍是 `compose('build','memory')` 完成才 `compose('build','gateway')`，没有并行构建、隐式全量 --build 或不必要重建。
 - 原作者发布清单机制必须继续保护 runtime、secrets、配置和 .git；此次新增测试和本文也列入 release-files.json。确认旧版升级引导和所有原有测试没有因新字段/菜单改变而回归。
+- MCP OAuth：核验授权页只允许当前验证过的回调 origin，其他安全头不变；检查不匹配的回调、错误 Key、PKCE、state、原回调查询参数、非法 host/端口/策略注入、IPv6 完成页、静态 Bearer。浏览器应完成回调并换取 token，而不只是 HTTP 303；检查真实代理是否追加第二份 CSP。
 
 ### 2.4 测试命令（开发机器/独立工作树，不在生产小内存 VPS 跑全套）
 
@@ -104,8 +114,16 @@
 ```sh
 python -m pip install -c constraints-runtime.txt -e '.[test,http,embedding,mcp,background]'
 python -m pytest -q tests/test_anthropic_cache_layout.py tests/test_anthropic_thinking_compat.py tests/test_anthropic_usage_compat.py
+python -m pytest -q tests/test_mcp_oauth.py tests/test_http_mcp.py tests/test_gateway_contract.py
 python -m pytest -q tests/test_upstream_update.py tests/test_installer_menu.py tests/test_installer_doctor.py tests/test_upstream_catalog.py tests/test_public_settings.py
 python -m pytest -q
+```
+
+OAuth 浏览器回归（仅独立开发机，需可用的 Chromium，不在低内存 VPS 安装浏览器）：
+
+```sh
+python -m pip install playwright
+SEREIN_TEST_CHROMIUM=/实际/chromium/路径 python -m pytest -q tests/test_mcp_oauth.py
 ```
 
 前端 Node 22.12+：
@@ -118,6 +136,35 @@ npm run build
 ```
 
 按需补查其他测试文件、静态检查与实际 API mock；记录命令、通过/失败数和失败原因。若环境限制不能运行，报告缺口而不是声称通过。特别核对已有测试中对无 thinking、默认 max_tokens=1024、原始安装元数据和网页版本链接的断言。审查发现问题后，提交小范围修复并复测，再给用户部署建议。
+
+### 2.5 本地全量回归记录（2026-11-26）
+
+在 OAuth 修复过程中（IPv4 CSP 修复已生效、最终 IPv6/HTTPS 浏览器用例尚未齐备）执行 `python -m pytest -q`，依赖按 constraints-runtime.txt 安装：**2573 passed、13 skipped、24 failed**。随后最终版含浏览器的 focused suite **44 passed**。这 24 个失败用例在修复前的独立工作树 `c11e7b9836364d294ad47aa34a87edc4e291b925` 逐一对照复跑，也全部失败。它们在本次 OAuth 修改前就存在（不等于都是原作者缺陷；例如其中有本地 SOCKS 代理缺少 socksio 的环境问题）。尚未修复或定位每一项，不要据此宣布整仓库通过、不要直接迁移。请 Codex 清理测试环境后定位剩余失败：
+
+- `tests/test_event_handoff.py::test_three_stage_image_chain_preserves_bytes_transcription_and_raw_sources[agent]`
+- `tests/test_event_handoff.py::test_three_stage_image_chain_preserves_bytes_transcription_and_raw_sources[api]`
+- `tests/test_file_imports.py::test_sillytavern_preview_batch_resume_and_explicit_summary`
+- `tests/test_file_imports.py::test_import_history_uses_compact_boundary_without_consuming_live_chat`
+- `tests/test_file_imports.py::test_completed_import_can_be_released_into_event_pipeline`
+- `tests/test_file_imports.py::test_import_summary_choice_runs_without_automatic_switch`
+- `tests/test_file_imports.py::test_skip_only_affects_selected_import_and_not_live_originals`
+- `tests/test_legacy_migration_e2e.py::test_full_synthetic_conversion`
+- `tests/test_live_jobs.py::test_promoted_event_leaves_revision_inbox_and_future_scout_materials`
+- `tests/test_live_publication.py::test_upgrade_chat_uses_prepared_routes_without_publishing_or_reembedding[False]`
+- `tests/test_live_publication.py::test_upgrade_chat_uses_prepared_routes_without_publishing_or_reembedding[True]`
+- `tests/test_narrative_theme.py::test_discover_mixed_sources_excludes_locked_and_does_not_write`
+- `tests/test_narrative_theme.py::test_discovery_rejects_invented_material`
+- `tests/test_narrative_theme.py::test_discovery_caps_material_input_and_selection`
+- `tests/test_personal_recall.py::test_gateway_and_hook_resolve_the_same_speaker_and_deliver_body[user_birthday]`
+- `tests/test_personal_recall.py::test_gateway_and_hook_resolve_the_same_speaker_and_deliver_body[assistant_birthday]`
+- `tests/test_revision_candidates.py::test_promoted_live_event_keeps_originals_and_retires_hint_without_losing_draft`
+- `tests/test_transcription_first.py::test_saved_transcript_survives_expired_external_original[False-False]`
+- `tests/test_transcription_first.py::test_saved_transcript_survives_expired_external_original[False-True]`
+- `tests/test_transcription_first.py::test_saved_transcript_survives_expired_external_original[True-False]`
+- `tests/test_transcription_first.py::test_saved_transcript_survives_expired_external_original[True-True]`
+- `tests/test_upstream_catalog.py::test_index_status_distinguishes_missing_selection_and_provider_response[403-index_configuration_or_contract_error]`
+- `tests/test_upstream_catalog.py::test_index_status_distinguishes_missing_selection_and_provider_response[200-embedding_invalid_response]`
+- `tests/test_write_context.py::test_prepared_vectors_can_find_nonlexical_front_context`
 
 ## 3. 生产迁移：先完整备份，后换源码
 
@@ -191,6 +238,7 @@ docker compose ... up -d --wait gateway
 ### 3.5 上线核验与回退
 
 - 服务启动和健康检查通过后，先核对网页登录、原 API Key、原域名及端口、数据库/记忆/原话/图片/配置/模型/索引状态、任务积压，检查日志是否有 schema、权限、OOM 错误。用合成数据进行只读查询或小范围测试，避免污染真实记忆。
+- 在用户明确授权的实际客户端中重新发起 MCP OAuth，用无痕窗口或正常刷新重新加载授权页；核对真正的回调 GET、code/state、token 交换和 MCP 初始化而非仅看 303。若仍报 CSP，检查应用与代理各自的 CSP 响应头（勿记录 Key、code、state、token），不要关闭浏览器安全设置。
 - 再设置 Anthropic 上游：Messages、Anthropic 明确断点、动态上下文优化 late-system、尾部 4000、缓存时长保持原设置。Orbis 世界书仍为「最新用户消息前（系统级）」；时间戳保持原配置。用经用户同意的少量 API 请求验证高/超高、摘要显示、MCP/tool 续轮、两轮以上真实缓存读写。记录脱敏统计而不是原始上下文。
 - 若失败，立即停止新实例及写入，不删除新库；保留失败现场副本以便诊断。根据备份恢复与旧版本匹配的完整源码、runtime、secrets、部署配置及原项目名/路径，避免把新 schema DB 直接交给旧代码。使用原镜像或旧源码分步构建，健康后恢复入口。若新实例已写入新记忆，回退到旧快照会丢失这段新增内容，需先单独备份新库并由用户决定如何保留，不擅自覆盖。
 - 明确提交用户可读的迁移报告：旧/新 SHA、备份位置与校验（无秘密）、验证通过项、停服/回退状态、仍未确认事项。没有验证通过不要宣布上线完成。

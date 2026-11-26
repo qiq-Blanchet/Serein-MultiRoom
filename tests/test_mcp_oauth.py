@@ -2,6 +2,7 @@ import base64
 import hashlib
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
 from fastapi.testclient import TestClient
 
 from serein.api.http import create_app
@@ -145,6 +146,9 @@ def test_oauth_rejects_open_redirect_bad_key_and_replayed_code(tmp_path):
             'resource':'https://memory.example/serein/mcp'}
         mismatch = client.get('/authorize', params=params)
         assert mismatch.status_code == 400 and 'redirect_uri' in mismatch.text
+        bad_consent = client.post('/authorize', data={**params, 'gateway_key':'synthetic-gateway-key'},
+                                  follow_redirects=False)
+        assert bad_consent.status_code == 400 and 'location' not in bad_consent.headers
 
         params['redirect_uri'] = registration['redirect_uris'][0]
         wrong_key = client.post('/authorize', data={**params, 'gateway_key':'wrong'},
@@ -164,6 +168,95 @@ def test_oauth_rejects_open_redirect_bad_key_and_replayed_code(tmp_path):
             'resource':valid['resource'],
         })
         assert replay.status_code == 400 and replay.json()['error'] == 'invalid_grant'
+
+
+@pytest.mark.parametrize(('callback', 'callback_origin'), [
+    ('https://chat.openai.com/aip/callback', 'https://chat.openai.com'),
+    ('https://client.example:8443/oauth/callback?existing=1', 'https://client.example:8443'),
+    ('http://127.0.0.1:9876/callback', 'http://127.0.0.1:9876'),
+    ('http://[::1]:9876/callback', None),
+])
+def test_oauth_consent_csp_allows_only_selected_callback_origin(tmp_path, callback, callback_origin):
+    settings = Settings(tmp_path/'memory.db')
+    with Store(settings.database):
+        pass
+    with TestClient(create_app(settings, token='synthetic-gateway-key'),
+                    base_url='https://memory.example') as client:
+        registration = client.post('/register', json={
+            'redirect_uris': [callback, 'https://other.example/callback'],
+        })
+        assert registration.status_code == 201
+        params = {'response_type':'code', 'client_id':registration.json()['client_id'],
+            'redirect_uri':callback, 'state':'exact-state',
+            'code_challenge':_challenge('v'*43), 'code_challenge_method':'S256',
+            'resource':'https://memory.example/serein/mcp'}
+        page = client.get('/authorize', params=params)
+        assert page.status_code == 200
+        directives = {part.strip().split()[0]: part.strip().split()[1:]
+                      for part in page.headers['content-security-policy'].split(';')}
+        form_sources = ["'self'"] + ([callback_origin] if callback_origin else [])
+        assert directives == {'default-src':["'none'"], 'form-action':form_sources,
+                              'base-uri':["'none'"], 'frame-ancestors':["'none'"]}
+        assert '<form method="post" action="/authorize">' in page.text
+        assert page.headers['referrer-policy'] == 'no-referrer'
+        assert page.headers['cache-control'] == 'no-store'
+        consent = client.post('/authorize', data={**params, 'gateway_key':'synthetic-gateway-key'},
+                              follow_redirects=False)
+        if callback_origin is None:
+            # CSP host-source syntax cannot represent IPv6 literals; the
+            # success document navigates independently of the submitted form.
+            from html.parser import HTMLParser
+
+            class CompletionPage(HTMLParser):
+                refresh = None
+                link = None
+
+                def handle_starttag(self, tag, attrs):
+                    attrs = dict(attrs)
+                    if tag == 'meta' and attrs.get('http-equiv') == 'refresh':
+                        self.refresh = attrs['content']
+                    if tag == 'a':
+                        self.link = attrs['href']
+
+            assert consent.status_code == 200
+            completion = CompletionPage()
+            completion.feed(consent.text)
+            assert completion.refresh == '0;url='+completion.link
+            assert consent.headers['referrer-policy'] == 'no-referrer'
+            assert "form-action 'none'" in consent.headers['content-security-policy']
+            assert 'synthetic-gateway-key' not in consent.text
+            destination = completion.link
+        else:
+            assert consent.status_code == 303
+            destination = consent.headers['location']
+        location = urlsplit(destination)
+        assert (location.scheme, location.netloc, location.path) == (
+            urlsplit(callback).scheme, urlsplit(callback).netloc, urlsplit(callback).path)
+        query = parse_qs(location.query)
+        assert query['state'] == ['exact-state'] and query['code'][0]
+        assert all(query[name] == values for name, values in parse_qs(urlsplit(callback).query).items())
+        assert 'gateway_key' not in query and 'synthetic-gateway-key' not in destination
+        assert 'other.example' not in page.headers['content-security-policy']
+
+
+@pytest.mark.parametrize('callback', [
+    'https://*.example/callback',
+    'https://client.example;form-action/callback',
+    'https://client.example https:/callback',
+    'https://client.example,https:/callback',
+    'https://client.example:99999/callback',
+    'https://client.example\\bad.example/callback',
+    'https://client.example%20/callback',
+])
+def test_oauth_rejects_unsafe_callback_csp_source(tmp_path, callback):
+    settings = Settings(tmp_path/'memory.db')
+    with Store(settings.database):
+        pass
+    with TestClient(create_app(settings, token='synthetic-gateway-key'),
+                    base_url='https://memory.example') as client:
+        result = client.post('/register', json={'redirect_uris':[callback]})
+        assert result.status_code == 400
+        assert result.json()['error'] == 'invalid_client_metadata'
 
 
 def test_oauth_registration_cap_evicts_unused_clients_and_public_http_is_refused(tmp_path, monkeypatch):
@@ -192,3 +285,104 @@ def test_oauth_registration_cap_evicts_unused_clients_and_public_http_is_refused
         })
         assert response.status_code == 400
         assert 'requires HTTPS' in response.text
+
+
+@pytest.mark.parametrize(('callback_host', 'scheme'), [('127.0.0.1', 'http'), ('::1', 'http'), ('localhost', 'https')])
+def test_oauth_cross_origin_redirect_in_chromium(tmp_path, callback_host, scheme):
+    """Opt-in real-browser check; both endpoints are synthetic loopback servers."""
+    import os
+    import shutil
+    import socket
+    import subprocess
+    import threading
+    import time
+    from urllib.parse import urlencode
+
+    executable = os.environ.get('SEREIN_TEST_CHROMIUM')
+    if not executable:
+        pytest.skip('Set SEREIN_TEST_CHROMIUM to a Chromium executable and install playwright')
+    playwright = pytest.importorskip('playwright.sync_api')
+    import httpx
+    import uvicorn
+
+    if callback_host == '::1' and not socket.has_ipv6:
+        pytest.skip('IPv6 unavailable')
+    tls = {}
+    if scheme == 'https':
+        openssl = shutil.which('openssl')
+        if not openssl:
+            pytest.skip('openssl required to generate a synthetic HTTPS certificate')
+        cert, key = tmp_path/'certificate.pem', tmp_path/'key.pem'
+        subprocess.run([openssl, 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+                        '-keyout', str(key), '-out', str(cert), '-days', '1',
+                        '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1'],
+                       check=True, capture_output=True)
+        tls = {'ssl_certfile':str(cert), 'ssl_keyfile':str(key)}
+
+    settings = Settings(tmp_path/'browser-memory.db')
+    with Store(settings.database):
+        pass
+    app = create_app(settings, token='synthetic-gateway-key')
+
+    @app.get('/test-callback')
+    def callback(code: str, state: str):
+        return {'code':code, 'state':state}
+
+    with socket.socket() as server_socket, socket.socket(socket.AF_INET6 if callback_host == '::1' else socket.AF_INET) as callback_socket:
+        server_socket.bind(('127.0.0.1', 0))
+        try:
+            callback_socket.bind(('127.0.0.1' if callback_host == 'localhost' else callback_host, 0))
+        except OSError as exc:
+            if callback_host == '::1':
+                pytest.skip(f'IPv6 loopback unavailable: {exc}')
+            raise
+        origin = f'{scheme}://127.0.0.1:{server_socket.getsockname()[1]}'
+        host = '[::1]' if callback_host == '::1' else callback_host
+        redirect_uri = f'{scheme}://{host}:{callback_socket.getsockname()[1]}/test-callback'
+        server = uvicorn.Server(uvicorn.Config(app, access_log=False, log_level='error', **tls))
+        thread = threading.Thread(target=server.run, kwargs={'sockets':[server_socket, callback_socket]}, daemon=True)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 10
+            while not server.started and thread.is_alive() and time.monotonic() < deadline:
+                time.sleep(.02)
+            assert server.started
+            verifier = 'v'*43
+            registration = httpx.post(origin+'/register', trust_env=False, verify=False, json={'redirect_uris':[redirect_uri]})
+            assert registration.status_code == 201
+            params = {'response_type':'code', 'client_id':registration.json()['client_id'],
+                      'redirect_uri':redirect_uri, 'state':'browser-state',
+                      'code_challenge':_challenge(verifier), 'code_challenge_method':'S256',
+                      'resource':origin+'/serein/mcp'}
+            with playwright.sync_playwright() as p:
+                browser = p.chromium.launch(executable_path=executable, args=['--disable-gpu', '--no-proxy-server'])
+                try:
+                    # Ignore only the synthetic loopback server's test certificate; CSP stays enabled.
+                    page = browser.new_page(ignore_https_errors=scheme == 'https')
+                    errors = []
+                    page.on('console', lambda message: errors.append(message.text) if message.type == 'error' else None)
+                    page.goto(origin+'/authorize?'+urlencode(params))
+                    page.locator('input[name=gateway_key]').fill('synthetic-gateway-key')
+                    try:
+                        with page.expect_request(lambda request: request.url.startswith(redirect_uri), timeout=5000) as navigation:
+                            page.get_by_role('button', name='确认授权').click()
+                    except playwright.TimeoutError:
+                        pytest.fail(f'Callback navigation blocked; browser console: {errors}')
+                    request = navigation.value
+                    assert request.method == 'GET' and request.post_data is None
+                    page.wait_for_url(redirect_uri+'?*', timeout=5000)
+                    query = parse_qs(urlsplit(page.url).query)
+                    assert query['state'] == ['browser-state'] and query['code'][0]
+                    assert 'synthetic-gateway-key' not in request.url and 'gateway_key' not in query
+                    assert not any('form-action' in error for error in errors)
+                    token = httpx.post(origin+'/token', trust_env=False, verify=False, data={
+                        'grant_type':'authorization_code', 'client_id':params['client_id'],
+                        'code':query['code'][0], 'redirect_uri':redirect_uri, 'code_verifier':verifier,
+                        'resource':params['resource'],
+                    })
+                    assert token.status_code == 200
+                finally:
+                    browser.close()
+        finally:
+            server.should_exit = True
+            thread.join(timeout=10)

@@ -12,12 +12,13 @@ import hashlib
 import hmac
 import html
 import json
+import re
 import secrets
 import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
+from urllib.parse import SplitResult, parse_qs, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -84,7 +85,8 @@ def _normalize_resource(value: str, origin: str) -> str:
 
 
 def _redirect_uri(value: str) -> str:
-    if not isinstance(value, str) or not value or len(value) > 2048:
+    if (not isinstance(value, str) or not value or len(value) > 2048
+            or any(ord(char) <= 32 or ord(char) == 127 for char in value) or "\\" in value):
         raise ValueError("Invalid redirect_uri")
     try:
         parsed = urlsplit(value)
@@ -95,7 +97,22 @@ def _redirect_uri(value: str) -> str:
         raise ValueError("redirect_uri must use HTTPS or a loopback HTTP address")
     if parsed.username or parsed.password or parsed.fragment:
         raise ValueError("Invalid redirect_uri")
+    _callback_csp_source(parsed)
     return value
+
+
+def _callback_csp_source(parsed: SplitResult) -> str | None:
+    # A callback is client-supplied data. Only serialize a literal host and
+    # numeric port into CSP; never interpolate a raw URL or CSP metacharacters.
+    # International domain names must use their ASCII (IDNA) representation.
+    if not re.fullmatch(r"(?:[a-zA-Z0-9.-]+|\[[0-9a-fA-F:.]+\])(?::[0-9]+)?", parsed.netloc):
+        raise ValueError("Invalid redirect_uri host")
+    port = parsed.port  # Also checks the port range.
+    host = parsed.hostname
+    if ":" in host:
+        # Chromium rejects IPv6 literals in CSP host-source expressions.
+        return None
+    return f"{parsed.scheme}://{host}" + (f":{port}" if port is not None else "")
 
 
 def _append_query(uri: str, values: dict[str, str]) -> str:
@@ -413,8 +430,13 @@ def routes(database: Path, gateway_key: str, *, current_gateway_key=None) -> tup
 <form method="post" action="/authorize">{hidden}
 <label>Gateway Key <input name="gateway_key" type="password" required autocomplete="current-password"></label>
 <button type="submit">确认授权</button></form></main></body></html>"""
+        # Chromium applies form-action to the 303 after the same-origin POST.
+        # Allow just the selected, already exactly matched registered callback
+        # origin. The password form still posts to /authorize, not the client.
+        callback_source = _callback_csp_source(urlsplit(params["redirect_uri"]))
+        form_sources = "'self'" + (f" {callback_source}" if callback_source else "")
         return HTMLResponse(page, headers={"Cache-Control": "no-store", "Pragma": "no-cache",
-            "Content-Security-Policy": "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+            "Content-Security-Policy": f"default-src 'none'; form-action {form_sources}; base-uri 'none'; frame-ancestors 'none'",
             "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"})
 
     @router.post("/authorize")
@@ -435,6 +457,18 @@ def routes(database: Path, gateway_key: str, *, current_gateway_key=None) -> tup
             location = _append_query(params["redirect_uri"], {"code": code, "state": params["state"]})
         except ValueError as exc:
             return _oauth_error("invalid_request", str(exc))
+        if _callback_csp_source(urlsplit(params["redirect_uri"])) is None:
+            # IPv6 callbacks cannot be expressed as a literal CSP source. End
+            # the POST with a new document, then navigate independently via
+            # a GET, without allowing the password form to submit elsewhere.
+            destination = html.escape(location, quote=True)
+            page = f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width"><title>授权成功</title>
+<meta http-equiv="refresh" content="0;url={destination}"></head>
+<body><p>授权成功，正在返回客户端。</p><a href="{destination}" rel="noreferrer">继续</a></body></html>"""
+            return HTMLResponse(page, headers={"Cache-Control": "no-store", "Pragma": "no-cache",
+                "Content-Security-Policy": "default-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
+                "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"})
         return RedirectResponse(location, status_code=303, headers={"Cache-Control": "no-store"})
 
     @router.post("/token")
