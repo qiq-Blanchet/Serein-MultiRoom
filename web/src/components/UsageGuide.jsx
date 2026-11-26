@@ -161,8 +161,8 @@ export function UsageGuide({ onOpenSettingsTab, initialPage }) {
       <p>MCP 和聊天 API 共用安装时生成的 Gateway Key。安装完成的终端输出和安装目录下的 <code>deploy/connection-guide.txt</code> 都有；也可读取 <code>{location?.root ? `${location.root.replace(/[\\/]$/, "")}${/^[A-Za-z]:/.test(location.root) ? "\\" : "/"}deploy${/^[A-Za-z]:/.test(location.root) ? "\\" : "/"}secrets${/^[A-Za-z]:/.test(location.root) ? "\\" : "/"}api-token` : "deploy/secrets/api-token"}</code> 的完整内容。本页不展示实际密钥。</p>
       <p>网页登录用安装时设置的用户名、密码；模型厂商的 API Key 填在<SettingsLink tab="models" onOpen={onOpenSettingsTab}>模型页</SettingsLink>。主菜单 <code>6</code> 会更换 Gateway Key，旧静态 Key 和已经发放的 OAuth 凭据随即失效；OAuth 客户端需要重新授权。密钥和连接说明请勿公开。</p>
       <h4>聊天窗口与开窗续接</h4>
-      <p>在客户端添加请求头：名称填 <code>X-Serein-Window-ID</code>，值填当前会话的独立标识，例如 <code>chat-001</code>。同一会话保持不变，新建会话换一个值；若客户端支持会话 ID 变量，可使用它。</p>
-      <p>不填请求头也能使用，会统一进入默认会话 <code>main</code>，共用提醒轮次和召回冷却，无法据此识别新窗口。固定写一个值也不会自动区分窗口。启用开窗续接后，可在侧栏“换窗”页选择带入最近 1–50 条原话；“最近原话”和“尚未整理的原话”只能开启一个，打开一个会自动关闭另一个。选择命令方式后，在聊天中发送 <code>/resume</code>，也可以在指令后写上想继续聊的话，Serein 会读取完整的接续资料。</p>
+      <p>客户端支持自动提供会话标识时，可添加请求头：名称填 <code>X-Serein-Window-ID</code>，值填当前会话的独立标识，例如 <code>chat-001</code>。同一会话保持不变，新建会话换一个值；若客户端支持会话 ID 变量，可使用它。</p>
+      <p>不填请求头也能使用，会统一进入默认会话 <code>main</code>，共用提醒轮次与续接会话。心绪和网关自动召回冷却由实例共用。固定写一个值也不会自动区分窗口。启用开窗续接后，可在侧栏“换窗”页选择带入最近 1–50 条原话；“最近原话”和“尚未整理的原话”只能开启一个，打开一个会自动关闭另一个。选择命令方式后，在聊天中发送 <code>/resume</code>，也可以在指令后写上想继续聊的话，Serein 会读取完整的接续资料。</p>
       <p>两个续接入口在功能设置独立开关，可同时开启；内容选择在侧栏“换窗”页。默认开启网关指令入口，发送 <code>/resume</code> 时聊天需经过本实例网关；MCP 入口开启后提供只读 <code>resume</code> 工具。已通过指令读取本轮资料时，无须再次调用工具。两个入口均关闭时仍可预览和复制，关闭开窗续接总开关则停用整个功能。勾选后预览会自动更新，无须先保存；点击“保存选择”才更新下次续接的内容。让客户端读到 <code>has_more: false</code> 才算读完；换窗页同样读完全部页面后才能复制完整资料。读取不会调用模型或记录注入。</p>
       <h4>自建前后端：预装到 Codex 新窗口</h4>
       <p>如果聊天界面、后端和换窗动作都由你自己管理，可让后端请求 Serein 的结构化续接资料，再通过 Codex App Server 新建 thread，预装最新窗影、Scene、Event 和所选原话。示例目录：<code>{codexExamplePath}</code>。</p>
@@ -227,7 +227,7 @@ export function UsageGuide({ onOpenSettingsTab, initialPage }) {
         <li><strong>Event Writer</strong>：每条拟写的 Event 分别调用写作模型，结合原话、必要前情和已有 Event 生成正文；跳过或暂缓的材料不写。<strong>建议给 Event Writer 选理解上下文和写作能力较强的模型</strong>，它要处理人物归属、因果、修订与细节取舍，不只是压缩摘要。</li>
       </ol>
       <p>调用次数随批次、审阅范围、Event 和图片变化。Curator 与 Writer 各可补读一次。文字步骤的实际模型／校验失败跨执行累计三次后暂停该批，成功结果保留；其他聊天继续，同一聊天的后续材料等待恢复。检查原因后，在原话整理页点“重试此批次”，从失败步骤继续，不从头重跑。Agent 等待、日间只归线和调用前参数错误不适用这项预算。</p>
-      <p>图片转录按同一张图累计三次失败，之后可点“重试这张图片”；成功图片与独立文字继续，依赖失败图片的活动暂存。原图无有效地址或返回 404/410 则跳过附件，保留文字和其他图片，不猜补内容。下载超时、403/5xx 或冻结材料损坏仍保留错误。手动重试会重新开放调用机会，可能产生费用。</p>
+      <p>图片下载或转录失败时，自动摘要继续整理文字，保留其他图片的有效转录。缺少可用转录的图片只记录张数。需要补转录时，可在“原话整理”展开“图片转录记录”，点“重试这张图片”重新开放调用机会。</p>
       <p>归线材料“待修复”与模型失败暂停不同：先重新校验，无法恢复时明确确认作废本批计划并重新归线；不会自动跳过。</p>
       <p>在<SettingsLink tab="summary" onOpen={onOpenSettingsTab}>自动摘要管理</SettingsLink>可调整默认三天的 Track 回看、Writer 首轮并发数及四个默认关闭的开关：跨线联合审阅、逐条材料取舍、普通交流轮次门槛、受保护 Event 后续追加。联合审阅核对同一聊天中由明确跨线消息连接的最多三条话题线；轮次门槛要求至少两轮完整交流；受保护追加原样保留旧正文，只添加新段。保存后用于新批次，不改已有记忆或已冻结任务。</p>
       <p>在<SettingsLink tab="summary" onOpen={onOpenSettingsTab}>自动摘要管理</SettingsLink>选择 API 时，由 Serein 向各阶段所选上游发请求；选 Agent 时，由已认证的外部执行器领取任务，实际模型调用和费用取决于它的实现。生成 Event 后，若启用了打标或检索索引，后台还可能分别调用打标模型或 Embedding；它们不属于上述三阶段。关闭自动摘要会停止定时整理调用，但原话仍保存，手动“继续整理”和其他独立功能仍可能调用各自模型。</p>
