@@ -113,6 +113,12 @@ class ClientContext:
         self.gateway_cfg = {}
         self.pending_turn_injections = {}
         self.pending_tool_reasoning = {}
+        self._reasoning_cache_exact_only = set()
+        self.reasoning_cache_ttl_seconds = 3600.0
+        self.reasoning_cache_max_sessions = 64
+        self.reasoning_cache_max_entries_per_session = 32
+        self.reasoning_cache_max_session_bytes = 2 * 1024 * 1024
+        self.reasoning_cache_max_bytes = 16 * 1024 * 1024
         self.turn_injection_snapshot_ttl_seconds = 3600.0
         self.turn_injection_snapshot_max_per_session = 4
 
@@ -177,19 +183,8 @@ class ClientContext:
 
     @staticmethod
     def _cache_min_tokens_for_model(model: str) -> int:
-        lowered = str(model or "").lower()
-        if re.search(r"\bclaude[-_. ]+(?:fable|mythos)[-_. ]+5(?:[-_.]\d+)?\b", lowered):
-            return 512
-        if re.search(r"\bclaude[-_. ]+(?:opus|haiku)[-_. ]+5(?:[-_.]\d+)?\b", lowered):
-            return 512
-        if re.search(r"\bclaude[-_. ]+sonnet[-_. ]+5[-_.]5\b", lowered):
-            return 512
-        if re.search(r"\bclaude[-_. ]+(?:sonnet[-_. ]+5(?:\D|$)|sonnet[-_. ]+4[-_.]6\b|opus[-_. ]+4[-_.]8\b)", lowered):
-            return 1024
-        if "mythos" in lowered and "preview" in lowered:
-            return 2048
-        if re.search(r"\bclaude[-_. ]+opus[-_. ]+4[-_.]7\b", lowered):
-            return 2048
+        # A conservative, model-independent estimate, not the provider's exact
+        # minimum. The independent tail reserve remains 4000 by default.
         return 4096
 
     @staticmethod
@@ -1067,10 +1062,127 @@ class ClientContext:
             return ""
         return self._trim_text("\n\n".join([intro, *unique_parts]), max_chars)
 
+    @staticmethod
+    def _tool_result_refs(message: Any) -> list[tuple[dict[str, Any], str]]:
+        """Return mutable references to result IDs on the prepared request only."""
+        if not isinstance(message, dict):
+            return []
+        if message.get("role") == "tool":
+            key = "tool_call_id" if message.get("tool_call_id") else "tool_use_id"
+            return [(message, key)]
+        if message.get("role") == "user" and isinstance(message.get("content"), list):
+            return [(block, "tool_use_id") for block in message["content"]
+                    if isinstance(block, dict) and block.get("type") == "tool_result"]
+        return []
+
+    def _remap_native_tool_results(
+        self, messages: list[Any], message: dict[str, Any],
+        client_ids: tuple[str, ...], provider_ids: tuple[str, ...],
+    ) -> bool:
+        """Translate an unambiguous, complete result batch to original IDs.
+
+        Keep provider-native assistant blocks (including signed thinking) intact.
+        Do not lend an original ID to another assistant call in the history, or
+        guess which result belongs to a missing/duplicated/reordered call.
+        """
+        if (not all(client_ids) or not all(provider_ids)
+                or len(set(client_ids)) != len(client_ids)
+                or len(set(provider_ids)) != len(provider_ids)):
+            return False
+        # Rewritten IDs cannot distinguish two calls with the same name
+        # and arguments in a parallel batch. Exact IDs still work.
+        semantic_calls = [value.split(":", 2)[-1] for value in self._tool_call_signature(message)]
+        if len(set(semantic_calls)) != len(semantic_calls):
+            return False
+        other_ids = {
+            call_id for other in messages
+            if isinstance(other, dict) and other is not message
+            for call_id in self._reasoning_tool_call_ids(other)
+        }
+        if other_ids.intersection(client_ids) or other_ids.intersection(provider_ids):
+            return False
+        refs = []
+        start = next(i for i, item in enumerate(messages) if item is message)
+        for following in messages[start + 1:]:
+            if isinstance(following, dict) and following.get("role") == "system":
+                continue
+            result_refs = self._tool_result_refs(following)
+            if not result_refs:
+                break
+            refs.extend(result_refs)
+        result_ids = [ref.get(key) for ref, key in refs]
+        if (len(result_ids) != len(client_ids)
+                or any(not isinstance(value, str) for value in result_ids)
+                or set(result_ids) != set(client_ids)):
+            return False
+        mapping = dict(zip(client_ids, provider_ids))
+        for call, provider_id in zip(message["tool_calls"], provider_ids):
+            call["id"] = provider_id
+        for ref, key in refs:
+            ref[key] = mapping[ref[key]]
+        return True
+
+    def _drop_reasoning_session(self, session_id: str) -> None:
+        self.pending_tool_reasoning.pop(session_id, None)
+        self._reasoning_cache_exact_only.discard(session_id)
+
+    def _prune_reasoning_cache(self, now: float) -> None:
+        """Bound abandoned sessions and large native responses by age/count/bytes."""
+        session_sizes = {}
+        for session_id, cache in list(self.pending_tool_reasoning.items()):
+            entries = [(signature, entry) for signature, group in cache.items() for entry in group]
+            # Stable ordering for multiple responses completed at the same instant.
+            entries.sort(key=lambda item: item[1]["_cached_at"])
+            live = [(signature, entry) for signature, entry in entries
+                    if now - entry["_cached_at"] < self.reasoning_cache_ttl_seconds
+                    and entry["_cache_bytes"] <= self.reasoning_cache_max_session_bytes
+                    and entry["_cache_bytes"] <= self.reasoning_cache_max_bytes]
+            size = sum(entry["_cache_bytes"] for _, entry in live)
+            cut = 0
+            while cut < len(live) and (
+                len(live) - cut > self.reasoning_cache_max_entries_per_session
+                or size > self.reasoning_cache_max_session_bytes
+            ):
+                size -= live[cut][1]["_cache_bytes"]
+                cut += 1
+            live = live[cut:]
+            if len(live) != len(entries):
+                # If an evicted entry had the same signature AND exact IDs,
+                # its surviving twin is ambiguous as well. Drop that twin,
+                # rather than turning a previously ambiguous ID into a hit.
+                live_objects = {id(entry) for _, entry in live}
+                evicted_keys = {
+                    (signature, self._reasoning_tool_call_ids(entry))
+                    for signature, entry in entries if id(entry) not in live_objects
+                }
+                live = [(signature, entry) for signature, entry in live
+                        if (signature, self._reasoning_tool_call_ids(entry)) not in evicted_keys]
+                size = sum(entry["_cache_bytes"] for _, entry in live)
+            if not live:
+                self._drop_reasoning_session(session_id)
+                continue
+            if len(live) != len(entries):
+                # An evicted duplicate may have shared a signature. Never treat
+                # the surviving entry as a uniquely identified rewritten call.
+                self._reasoning_cache_exact_only.add(session_id)
+                kept = {}
+                for signature, entry in live:
+                    kept.setdefault(signature, []).append(entry)
+                self.pending_tool_reasoning[session_id] = kept
+            session_sizes[session_id] = size
+        total = sum(session_sizes.values())
+        # dict insertion order is refreshed on successful use/store (LRU).
+        for session_id in list(self.pending_tool_reasoning):
+            if (len(self.pending_tool_reasoning) <= self.reasoning_cache_max_sessions
+                    and total <= self.reasoning_cache_max_bytes):
+                break
+            total -= session_sizes[session_id]
+            self._drop_reasoning_session(session_id)
+
     def _restore_cached_reasoning_content(self, session_id: str, messages: Any) -> None:
+        self._prune_reasoning_cache(time.monotonic())
         if not isinstance(messages, list) or not any(
-            isinstance(message, dict) and message.get("role") == "tool"
-            for message in messages
+            self._tool_result_refs(message) for message in messages
         ):
             return
 
@@ -1111,7 +1223,7 @@ class ClientContext:
             else:
                 # Some clients rewrite/drop IDs. Retain that compatibility only
                 # when the semantic signature is unique on BOTH sides.
-                if len(candidates) != 1 or sum(
+                if session_id in self._reasoning_cache_exact_only or len(candidates) != 1 or sum(
                     other_signature == signature for _, other_signature, _ in incoming
                 ) != 1:
                     continue
@@ -1119,6 +1231,19 @@ class ClientContext:
                 cached_ids = self._reasoning_tool_call_ids(cached_message)
                 if any(call_id in known_ids and call_id != cached_id
                        for call_id, cached_id in zip(call_ids, cached_ids)):
+                    continue
+            # An edited assistant turn is not an exact replay; do not
+            # reinsert stale content or reasoning (on any provider).
+            if self._coerce_message_text(message.get("content")) != cached_message["content_text"]:
+                continue
+            native = cached_message.get("_serein_anthropic_content")
+            if native:
+                if (message.get("reasoning_details")
+                        and message["reasoning_details"] != cached_message["reasoning_details"]):
+                    continue
+                provider_ids = self._reasoning_tool_call_ids(cached_message)
+                if call_ids != provider_ids and not self._remap_native_tool_results(
+                        messages, message, call_ids, provider_ids):
                     continue
             restored_fields = []
             if not message.get("reasoning_content") and cached_message.get("reasoning_content"):
@@ -1140,6 +1265,7 @@ class ClientContext:
                 restored += 1
 
         if restored:
+            self.pending_tool_reasoning[session_id] = self.pending_tool_reasoning.pop(session_id)
             logger.info(
                 "Gateway restored reasoning context for %s assistant tool-call message(s) | session=%s",
                 restored,
@@ -1147,6 +1273,8 @@ class ClientContext:
             )
 
     def _update_reasoning_cache(self, session_id: str, assistant_message: dict[str, Any]) -> None:
+        now = time.monotonic()
+        self._prune_reasoning_cache(now)
         signature = self._tool_call_signature(assistant_message)
         reasoning_content = assistant_message.get("reasoning_content")
         reasoning_details = assistant_message.get("reasoning_details")
@@ -1155,25 +1283,33 @@ class ClientContext:
         if signature and len(signature) == len(self._reasoning_tool_call_ids(assistant_message)):
             # Keep calls with no reasoning as ambiguity evidence too; otherwise
             # a later replay could borrow another call's reasoning via fallback.
-            cache = self.pending_tool_reasoning.setdefault(session_id, {})
-            cache.setdefault(signature, []).append({
+            entry = {
+                "content_text": self._coerce_message_text(assistant_message.get("content")),
                 "reasoning_content": reasoning_content,
                 "reasoning_details": deepcopy(reasoning_details),
                 "tool_calls": deepcopy(assistant_message.get("tool_calls", [])),
                 "_serein_anthropic_content": deepcopy(
                     assistant_message.get("_serein_anthropic_content", [])
                 ),
-            })
+            }
+            # Bound the serialized payload before retaining it. Count native
+            # blocks and their OpenAI projections, not merely response count.
+            entry["_cache_bytes"] = len(json.dumps([signature, entry], ensure_ascii=False, default=str).encode("utf-8"))
+            entry["_cached_at"] = now
+            cache = self.pending_tool_reasoning.pop(session_id, {})
+            cache.setdefault(signature, []).append(entry)
+            self.pending_tool_reasoning[session_id] = cache
+            self._prune_reasoning_cache(now)
             if reasoning_content or reasoning_details:
                 logger.info(
                     "Gateway cached reasoning context for tool continuation | session=%s tool_calls=%s",
                     session_id,
-                    list(signature),
+                    len(signature),
                 )
             return
 
         if not signature:
-            self.pending_tool_reasoning.pop(session_id, None)
+            self._drop_reasoning_session(session_id)
 
     @staticmethod
     def _reasoning_tool_call_ids(assistant_message: dict[str, Any]) -> tuple[str, ...]:
@@ -1344,8 +1480,9 @@ class ClientContext:
     ) -> list[Any]:
         """Project dynamic context only on the upstream request copy.
 
-        Orbis marks request-only host data with a wire name, independently of
-        its role. Never promote this data to the global Anthropic system.
+        Orbis marks request-only host data with a wire name. Keep it local to
+        the adjacent user/tool-result turn when safe; unmatched data falls
+        back to the legacy system path instead of being silently discarded.
         Unmarked late system instructions are moved only in the opt-in late
         mode, and only when an adjacent real user message can carry them.
         Leading system instructions and unmatched system messages retain their
@@ -1369,20 +1506,25 @@ class ClientContext:
             while end < len(messages) and isinstance(messages[end], dict) and messages[end].get("role") == "system":
                 end += 1
             carrier = messages[end] if end < len(messages) else None
+            if isinstance(carrier, dict) and carrier.get("role") == "tool":
+                # Normalize just this carrier on the upstream copy so host data
+                # can follow the tool results without altering their content.
+                result_id = carrier.get("tool_call_id") or carrier.get("tool_use_id")
+                if result_id:
+                    carrier = {"role": "user", "content": [{
+                        "type": "tool_result", "tool_use_id": str(result_id),
+                        "content": self._coerce_message_text(carrier.get("content")),
+                    }]}
             if not isinstance(carrier, dict) or carrier.get("role") != "user":
-                result.extend(
-                    system for system in messages[index:end]
-                    if system.get("name") != "orbis_host_data_v1"
-                )
+                # No safe adjacent carrier: preserve the source system messages
+                # (legacy fallback) rather than lose data or attach to the wrong turn.
+                result.extend(messages[index:end])
                 index = end
                 continue
             # A user content array can itself be a tool-result carrier.
             content = carrier.get("content")
             if not isinstance(content, (str, list)):
-                result.extend(
-                    system for system in messages[index:end]
-                    if system.get("name") != "orbis_host_data_v1"
-                )
+                result.extend(messages[index:end])
                 index = end
                 continue
             tool_blocks = (
@@ -1402,6 +1544,8 @@ class ClientContext:
                         host_parts.append(
                             "<serein_client_host_data>\n" + text + "\n</serein_client_host_data>"
                         )
+                    elif not has_tool_result:
+                        result.append(system)
                 updated = deepcopy(carrier)
                 if host_parts:
                     updated["content"] = [
@@ -1482,6 +1626,32 @@ class ClientContext:
                 else self._openai_content_to_anthropic_blocks(message.get("content"))
             )
             upstream_payload["messages"].append({"role": role, "content": content or ""})
+
+        # Anthropic combines consecutive user turns. Coalesce result batches
+        # explicitly so all tool_result blocks precede host text, even when
+        # clients send one result per message or mix wire formats.
+        merged_messages = []
+        for message in upstream_payload["messages"]:
+            content = message["content"]
+            if (message["role"] == "user" and isinstance(content, list)
+                    and any(block.get("type") == "tool_result" for block in content)
+                    and merged_messages and merged_messages[-1]["role"] == "user"
+                    and isinstance(merged_messages[-1]["content"], list)
+                    and any(block.get("type") == "tool_result" for block in merged_messages[-1]["content"])):
+                blocks = merged_messages[-1]["content"] + content
+                merged_messages[-1]["content"] = (
+                    [block for block in blocks if block.get("type") == "tool_result"]
+                    + [block for block in blocks if block.get("type") != "tool_result"]
+                )
+            else:
+                if message["role"] == "user" and isinstance(content, list) and any(
+                        block.get("type") == "tool_result" for block in content):
+                    message["content"] = (
+                        [block for block in content if block.get("type") == "tool_result"]
+                        + [block for block in content if block.get("type") != "tool_result"]
+                    )
+                merged_messages.append(message)
+        upstream_payload["messages"] = merged_messages
 
         if system_parts:
             upstream_payload["system"] = "\n\n".join(system_parts)

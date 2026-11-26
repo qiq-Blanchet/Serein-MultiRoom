@@ -1,13 +1,15 @@
 # cache-repair：Codex 审查、验证与迁移交接
 
-更新日期：2026-11-26。本文是工作交接，不是测试通过或生产部署证明。
+更新日期：2026-11-26。本文是原 cache-repair 工作交接，不是测试通过或生产部署证明。
+
+**续轮修复分支请先阅读 [cache-repair-followup 最新交接](cache-repair-followup-codex-handoff.md)。** 该文替换本篇旧的候选前缀门槛和目标分支描述；本篇完整备份 / 低内存构建 / 迁移回退指南仍适用。工作分支为 cache-repair-followup（等待 Codex 复核），不直接部署或合并。
 
 ## 0. 目标与执行边界
 
 - 原作者：`Yinglianchun/Serein`，基线提交 `43dfa5b7efb78b59e69a40c2df2cb3139197d8d2`。
-- 自有 Fork：`qiq-Blanchet/Serein-MultiRoom`；工作、测试及未来部署分支：`cache-repair`。
+- 自有 Fork：`qiq-Blanchet/Serein-MultiRoom`；原定制分支 `cache-repair`，当前独立续轮修复与复核分支 `cache-repair-followup`。最终部署分支由用户确认。
 - 本文编写前的实现 HEAD：`8b0a101301e3f6254add051abbb6db932940bc5c`（相对基线 8 个提交）。审查时重新核对 HEAD，不假定该 SHA 永远是最新。
-- 只在此分支继续修复，不直接改 main、其他实验分支或原作者仓库，不未经同意合并/部署。
+- 只在当前复核分支继续修复，不直接改原 cache-repair、main、其他实验分支或原作者仓库，不未经同意合并/部署。
 - 用户主要使用 Orbis / Operit 经 Serein 的 OpenAI Chat Completions 入口访问 Anthropic Messages 上游，使用 Claude 4.6 及之后的模型，经常用 high / xhigh；不要求维护 4.6 之前的 Thinking 特殊兼容。
 - VPS 现有安装据用户描述为 `/opt/Serein`，运行原作者版本并含小玑在 VPS 上手动打的旧 Thinking 补丁。实际安装目录、版本、部署方式、挂载和补丁尚未现场核对。
 - VPS 可用资源：用户报告内存仅 1 GB 多，硬盘剩余 20 GB 多。不要把该报告当成实时检测；生产构建必须分步、限并发，先检查磁盘、内存和 swap。
@@ -37,7 +39,7 @@
 
 转换用 `<serein_client_host_data>` / `<serein_late_system_context>` 包装；历史时间戳应与其原始 user 对应；保留顶部真正的 system，不改 OpenAI 透传和输入原件。普通中途 system 转为 user 时指令权限降低，这是明确的 opt-in 取舍；不会凭空获得 Anthropic 原生 system 权限。已合并在顶部 system 字符串内的世界书无法可靠分离。
 
-明确断点仍按原有估算、assistant 候选和模型最低阈值逻辑，默认 `anthropic_cache_tail_tokens=4000`，允许 0–100000 整数。**用户要求保持 4000，不自行改为 1000。** 4000 是候选断点尾部最低预留估算，不是世界书/输入长度上限，不截断世界书。当前没有重写整个缓存算法。
+明确断点仍按原有估算和 assistant 候选选择；续轮修复分支将候选前缀估算门槛简化为统一 4096，不再按型号区分，并保留 system/tools 的前缀估算。默认 `anthropic_cache_tail_tokens=4000`，允许 0–100000 整数。**用户要求保持 4000，不自行改为 1000。** 4000 是候选断点尾部最低预留估算，不是世界书/输入长度上限，不截断世界书。当前没有重写整个缓存算法。
 
 ### 1.2 Thinking 透传与请求默认值
 
@@ -209,11 +211,11 @@ docker ps --format '{{.Names}} {{.Image}} {{.Status}}'
 
 ### 3.3 切换到自有分支（用户确认后）
 
-- 在同一服务器、独立 staging 目录先取得已审查的 qiq-Blanchet/Serein-MultiRoom cache-repair 固定 commit。核对来源、提交和清单，不把生产数据提交 Git。避免用 git reset --hard、git clean -fdx 或覆盖整个运行目录来消除手改保护。
+- 在同一服务器、独立 staging 目录先取得 qiq-Blanchet/Serein-MultiRoom 的已审查、经用户确认的部署分支固定 commit。核对来源、提交和清单，不把生产数据提交 Git。避免用 git reset --hard、git clean -fdx 或覆盖整个运行目录来消除手改保护。
 - 推荐保留原完整安装目录为回退副本，按实际磁盘空间选择安全地复制/迁移 runtime 和 secrets、部署配置至新源码目录；新实例使用原路径 /opt/Serein（以实际路径为准）、原项目名、端口、域名和密钥。不得同时启动两套访问同一数据库的服务；旧目录不得被新实例继续写入。复制时保留权限、所有者、隐藏文件及已核实的挂载；外部绝对路径/符号链接需单独核查。
 - 不要复制旧源码覆盖新源码，也不要原封不动带入旧 update-state.json 的 source_hashes 作为新代码的状态。保留旧文件在备份中；新目录使用与实际已部署 commit 匹配的状态记录（由可信迁移/更新流程生成，先验证，不伪造完成状态）。确认首次安装后菜单 13 可用。
 - 原作者的 se 菜单 1 写死原作者 main；仅改 git origin 不够。首次接管可用已审查的新目录/引导或可验证的更新流程，不能直接运行旧菜单 1 期待得到 fork。旧源码有本地修改时原更新器会拒绝覆盖，这是保护，不是应绕过的障碍。
-- 在新代码生效前，保存新的 update_source（菜单 13，或经审查的迁移工具原子写入 installation.json、保留其他字段）。选择 qiq-Blanchet/Serein-MultiRoom / cache-repair。核对构建元数据是真正部署的 commit 和来源。旧 se 快捷方式若指向原路径，恢复原安装路径后应核验其指向。
+- 在新代码生效前，保存新的 update_source（菜单 13，或经审查的迁移工具原子写入 installation.json、保留其他字段）。选择 qiq-Blanchet/Serein-MultiRoom / 经用户确认的实际部署分支（若直接用续轮修复分支则为 cache-repair-followup）。核对构建元数据是真正部署的 commit 和来源。旧 se 快捷方式若指向原路径，恢复原安装路径后应核验其指向。
 - 不运行全新安装向导重新生成凭据；不使用旧 Ombre 迁移入口；不重建/清理向量、删除记忆、清空 volume、docker compose down -v 或 docker system prune -a。不要为了省空间先删除旧镜像与唯一备份。
 
 ### 3.4 低内存构建（硬性要求）
@@ -245,10 +247,10 @@ docker compose ... up -d --wait gateway
 
 ## 4. 后续维护
 
-首次切换成功后，运行 se → 13，自定义公开仓库 `qiq-Blanchet/Serein-MultiRoom`，分支 `cache-repair`，确认所显示的目标 commit。以后 se → 1 → 选择默认的先备份再更新。网页显示构建时来源，重建后核对版本。
+首次切换成功后，运行 se → 13，自定义公开仓库 `qiq-Blanchet/Serein-MultiRoom`，分支为用户确认的实际部署分支（若直接用续轮修复分支则为 `cache-repair-followup`），确认所显示的目标 commit。以后 se → 1 → 选择默认的先备份再更新。网页显示构建时来源，重建后核对版本。
 
-Fork 的 main 用于同步原作者；cache-repair 保存本定制。同步 main 不自动改变 cache-repair。需要吸收原作者更新时先检查差异，在开发分支合并/rebase（共享部署分支不擅自 force-push），重跑回归，确认数据库升级与更新器/发行清单仍兼容，再用菜单 1 更新 VPS。不要在运行源码目录直接叠加小玑旧 Thinking 补丁，否则可能覆盖新策略并触发本地修改保护。不要为了同步原作者 main 而把生产更新来源改回 main。
+Fork 的 main 用于同步原作者；cache-repair 保存原定制，cache-repair-followup 保存本轮独立修复。同步 main 不自动改变这两个分支。需要吸收原作者更新时先检查差异，在开发分支合并/rebase（共享部署分支不擅自 force-push），重跑回归，确认数据库升级与更新器/发行清单仍兼容，再用菜单 1 更新 VPS。不要在运行源码目录直接叠加小玑旧 Thinking 补丁，否则可能覆盖新策略并触发本地修改保护。不要为了同步原作者 main 而把生产更新来源改回 main。
 
 ## 5. 交付门槛
 
-请 Codex 先报告审查与测试，而非直接部署。发现 bug 可以在 cache-repair 分支修复并提交，保持用户选择的行为；涉及数据库、网络入口、密钥、付费测试、停服、删除、强推及生产迁移须另行征得明确同意。推荐顺序：审查 → 本地合成测试 → 修复/复测 → 用户确认完整备份与资源 → 迁移 → 功能/缓存验证 → 设置自有更新源 → 保留回退副本。
+请 Codex 先报告审查与测试，而非直接部署。发现 bug 可以在 cache-repair-followup 分支修复并提交，保持用户选择的行为；涉及数据库、网络入口、密钥、付费测试、停服、删除、强推及生产迁移须另行征得明确同意。推荐顺序：审查 → 本地合成测试 → 修复/复测 → 用户确认完整备份与资源 → 迁移 → 功能/缓存验证 → 设置自有更新源 → 保留回退副本。

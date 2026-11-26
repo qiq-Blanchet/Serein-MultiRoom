@@ -169,6 +169,10 @@ def routes(settings, services, auth):
         incoming = body.get('messages')
         if not isinstance(incoming, list) or not incoming or any(not isinstance(item, dict) for item in incoming):
             raise HTTPException(400, 'messages must be a nonempty list of messages')
+        # Internal provider replay blocks are only populated by the gateway's
+        # verified continuation cache, not accepted from the client.
+        for item in incoming:
+            item.pop('_serein_anthropic_content', None)
         if not isinstance(options, dict) or options.keys() - {'memory','window_id','delivered_ids'}:
             raise HTTPException(400, 'serein accepts memory, window_id and delivered_ids')
         delivered_ids = options.get('delivered_ids', [])

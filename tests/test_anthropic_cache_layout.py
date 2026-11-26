@@ -106,16 +106,15 @@ def test_native_tool_result_is_not_dropped_or_promoted_to_system():
     }
 
 
-def test_cache_breakpoint_supports_tool_use_and_current_model_thresholds():
+def test_cache_breakpoint_supports_tool_use_and_uniform_prefix_threshold():
     context = ClientContext()
-    assert context._cache_min_tokens_for_model('claude-sonnet-4-6') == 1024
-    assert context._cache_min_tokens_for_model('claude-opus-4-6') == 4096
-    assert context._cache_min_tokens_for_model('claude-opus-4-7') == 2048
-    assert context._cache_min_tokens_for_model('claude-opus-4-8') == 1024
-    assert context._cache_min_tokens_for_model('anthropic.claude-sonnet-5-5-v1:0') == 512
+    for name in ('claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7',
+                 'claude-opus-4-8', 'claude-sonnet-5-5', 'unknown'):
+        assert context._cache_min_tokens_for_model(name) == 4096
+        assert context._cache_tail_tokens_for_model(name) == 4000
 
     messages = [
-        {'role':'user','content':'prefix ' * 1000},
+        {'role':'user','content':'prefix ' * 3000},
         {'role':'assistant','content':[
             {'type':'tool_use','id':'call_1','name':'lookup','input':{}}]},
         {'role':'user','content':'tail ' * 3000},
@@ -138,7 +137,7 @@ def test_system_and_tools_count_toward_cacheable_prefix():
     assert context._find_cache_breakpoint(
         messages, model='claude-sonnet-4-6', tail_tokens=4000) is None
     payload = {
-        'system':'system ' * 900,
+        'system':'system ' * 3000,
         'tools':[{'name':'lookup','description':'tool ' * 300,
                   'input_schema':{'type':'object'}}],
         'messages':messages,
