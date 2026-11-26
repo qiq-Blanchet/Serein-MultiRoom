@@ -387,3 +387,28 @@ def test_custom_branch_update_uses_same_remote_and_pins_commit(monkeypatch,tmp_p
     state=json.loads((tmp_path/'deploy/update-state.json').read_text())
     assert state['repository']=='owner/repo' and state['branch']=='cache-repair'
     assert (tmp_path/'deploy/runtime/serein.db').read_bytes()==b'keep me'
+
+
+def test_same_commit_from_different_source_still_offers_rebuild(monkeypatch, tmp_path):
+    module = updater()
+    installation(tmp_path)
+    commit = upstream(module, tmp_path)
+    (tmp_path/'deploy/installation.json').write_text(json.dumps({
+        'backend':'docker',
+        'update_source':{'repository':'new/repo','branch':'cache-repair'},
+    }))
+    (tmp_path/'deploy/update-state.json').write_text(json.dumps({
+        'commit':commit,
+        'phase':'complete',
+        'repository':'old/repo',
+        'branch':'main',
+        'source_hashes':module.source_hashes(tmp_path),
+    }))
+    monkeypatch.setattr(module, 'latest_commit', lambda remote, branch: commit)
+    choices = []
+    manager = types.SimpleNamespace(
+        ROOT=tmp_path,
+        choose=lambda *args, **kwargs: choices.append((args, kwargs)) or 'r',
+    )
+    assert not module.run_update(manager)
+    assert len(choices) == 1

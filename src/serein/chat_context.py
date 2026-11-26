@@ -151,13 +151,24 @@ class ClientContext:
         model: str = "",
         tail_tokens: int | None = None,
     ) -> None:
+        prefix_tokens = count_tokens_approx(self._anthropic_content_text(payload.get("system")))
+        tools = payload.get("tools")
+        if isinstance(tools, list):
+            prefix_tokens += count_tokens_approx(
+                json.dumps(tools, ensure_ascii=False, sort_keys=True, default=str)
+            )
         self._attach_cache_control_to_anthropic_content(payload, "system", cache_control)
         self._attach_cache_control_to_anthropic_tools(payload, cache_control)
         messages = payload.get("messages", [])
         if not isinstance(messages, list):
             return
 
-        breakpoint_index = self._find_cache_breakpoint(messages, model=model, tail_tokens=tail_tokens)
+        breakpoint_index = self._find_cache_breakpoint(
+            messages,
+            model=model,
+            tail_tokens=tail_tokens,
+            prefix_tokens=prefix_tokens,
+        )
         if breakpoint_index is None:
             return
         message = messages[breakpoint_index]
@@ -167,7 +178,17 @@ class ClientContext:
     @staticmethod
     def _cache_min_tokens_for_model(model: str) -> int:
         lowered = str(model or "").lower()
-        if "sonnet" in lowered:
+        if re.search(r"\bclaude[-_. ]+(?:fable|mythos)[-_. ]+5(?:[-_.]\d+)?\b", lowered):
+            return 512
+        if re.search(r"\bclaude[-_. ]+(?:opus|haiku)[-_. ]+5(?:[-_.]\d+)?\b", lowered):
+            return 512
+        if re.search(r"\bclaude[-_. ]+sonnet[-_. ]+5[-_.]5\b", lowered):
+            return 512
+        if re.search(r"\bclaude[-_. ]+(?:sonnet[-_. ]+5(?:\D|$)|sonnet[-_. ]+4[-_.]6\b|opus[-_. ]+4[-_.]8\b)", lowered):
+            return 1024
+        if "mythos" in lowered and "preview" in lowered:
+            return 2048
+        if re.search(r"\bclaude[-_. ]+opus[-_. ]+4[-_.]7\b", lowered):
             return 2048
         return 4096
 
@@ -175,7 +196,14 @@ class ClientContext:
     def _cache_tail_tokens_for_model(model: str) -> int:
         return 4000
 
-    def _find_cache_breakpoint(self, messages: list[Any], *, model: str = "", tail_tokens: int | None = None) -> int | None:
+    def _find_cache_breakpoint(
+        self,
+        messages: list[Any],
+        *,
+        model: str = "",
+        tail_tokens: int | None = None,
+        prefix_tokens: int = 0,
+    ) -> int | None:
         if not isinstance(messages, list) or len(messages) < 3:
             return None
         min_tokens = self._cache_min_tokens_for_model(model)
@@ -186,7 +214,7 @@ class ClientContext:
             else count_tokens_approx(str(message or ""))
             for message in messages
         ]
-        prefix_tokens = sum(estimates)
+        prefix_tokens = max(0, int(prefix_tokens)) + sum(estimates)
         tail_tokens = 0
         for index in range(len(messages) - 2, -1, -1):
             tail_tokens += estimates[index + 1]
@@ -194,9 +222,20 @@ class ClientContext:
             message = messages[index]
             if not isinstance(message, dict) or message.get("role") != "assistant":
                 continue
-            if prefix_tokens >= min_tokens and tail_tokens >= tail_target:
+            if (prefix_tokens >= min_tokens and tail_tokens >= tail_target
+                    and self._anthropic_content_has_cache_target(message.get("content"))):
                 return index
         return None
+
+    @staticmethod
+    def _anthropic_content_has_cache_target(content: Any) -> bool:
+        if isinstance(content, str):
+            return bool(content.strip())
+        return isinstance(content, list) and any(
+            isinstance(block, dict)
+            and block.get("type") in {"text", "image", "document", "tool_use", "tool_result"}
+            for block in content
+        )
 
     def _anthropic_message_token_estimate(self, message: dict[str, Any]) -> int:
         if not isinstance(message, dict):
@@ -273,7 +312,7 @@ class ClientContext:
                 continue
             if block.get("cache_control"):
                 return True
-            if block.get("type") in {"text", "image", "document", "tool_result"}:
+            if block.get("type") in {"text", "image", "document", "tool_use", "tool_result"}:
                 block["cache_control"] = deepcopy(cache_control)
                 return True
         return False
@@ -1091,6 +1130,12 @@ class ClientContext:
                 if reasoning_text and not message.get("reasoning"):
                     message["reasoning"] = reasoning_text
                 restored_fields.append("reasoning_details")
+            if (not message.get("_serein_anthropic_content")
+                    and cached_message.get("_serein_anthropic_content")):
+                message["_serein_anthropic_content"] = deepcopy(
+                    cached_message["_serein_anthropic_content"]
+                )
+                restored_fields.append("provider_content")
             if restored_fields:
                 restored += 1
 
@@ -1115,6 +1160,9 @@ class ClientContext:
                 "reasoning_content": reasoning_content,
                 "reasoning_details": deepcopy(reasoning_details),
                 "tool_calls": deepcopy(assistant_message.get("tool_calls", [])),
+                "_serein_anthropic_content": deepcopy(
+                    assistant_message.get("_serein_anthropic_content", [])
+                ),
             })
             if reasoning_content or reasoning_details:
                 logger.info(
@@ -1322,19 +1370,47 @@ class ClientContext:
                 end += 1
             carrier = messages[end] if end < len(messages) else None
             if not isinstance(carrier, dict) or carrier.get("role") != "user":
-                result.extend(messages[index:end])
+                result.extend(
+                    system for system in messages[index:end]
+                    if system.get("name") != "orbis_host_data_v1"
+                )
                 index = end
                 continue
             # A user content array can itself be a tool-result carrier.
             content = carrier.get("content")
-            if not isinstance(content, (str, list)) or (
-                isinstance(content, list) and any(
-                    isinstance(block, dict) and block.get("type") in {"tool_result", "tool_use"}
-                    for block in content
+            if not isinstance(content, (str, list)):
+                result.extend(
+                    system for system in messages[index:end]
+                    if system.get("name") != "orbis_host_data_v1"
                 )
-            ):
-                result.extend(messages[index:end])
                 index = end
+                continue
+            tool_blocks = (
+                [block for block in content if isinstance(block, dict)
+                 and block.get("type") in {"tool_result", "tool_use"}]
+                if isinstance(content, list) else []
+            )
+            if tool_blocks:
+                host_parts = []
+                has_tool_result = any(block.get("type") == "tool_result" for block in tool_blocks)
+                for system in messages[index:end]:
+                    if system.get("name") != "orbis_host_data_v1":
+                        result.append(system)
+                        continue
+                    text = self._coerce_message_text(system.get("content")).strip()
+                    if text and has_tool_result:
+                        host_parts.append(
+                            "<serein_client_host_data>\n" + text + "\n</serein_client_host_data>"
+                        )
+                updated = deepcopy(carrier)
+                if host_parts:
+                    updated["content"] = [
+                        *deepcopy(content),
+                        {"type": "text", "text": "\n\n".join(host_parts)},
+                    ]
+                result.append(updated)
+                seen_dialogue = True
+                index = end + 1
                 continue
             moved: list[str] = []
             for system in messages[index:end]:
@@ -1344,7 +1420,7 @@ class ClientContext:
                     # Keep the source and diminished instruction authority explicit.
                     tag = "serein_client_host_data" if host_data else "serein_late_system_context"
                     moved.append(f"<{tag}>\n{text}\n</{tag}>")
-                else:
+                elif not host_data:
                     result.append(system)
             if moved:
                 updated = deepcopy(carrier)
@@ -1494,6 +1570,9 @@ class ClientContext:
                     continue
                 blocks.append(self._openai_image_url_to_anthropic_block(url))
                 continue
+            if block_type == "tool_result" and item.get("tool_use_id"):
+                blocks.append(deepcopy(item))
+                continue
         return blocks
 
     def _openai_image_url_to_anthropic_block(self, url: str) -> dict[str, Any]:
@@ -1597,6 +1676,7 @@ class ClientContext:
         if not text_parts and not tool_calls and not reasoning_details:
             return None
         message: dict[str, Any] = {"role": "assistant", "content": "\n".join(text_parts) if text_parts else None}
+        message["_serein_anthropic_content"] = deepcopy(content)
         if reasoning_details:
             message["reasoning_details"] = reasoning_details
             reasoning_text = self._reasoning_text_from_details(reasoning_details)

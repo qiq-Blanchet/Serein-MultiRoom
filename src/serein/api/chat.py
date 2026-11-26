@@ -373,6 +373,10 @@ def routes(settings, services, auth):
             except (httpx.HTTPError,ValueError,KeyError,IndexError,TypeError):
                 raise HTTPException(502,'Upstream request failed or returned an invalid response') from None
             completed(message)
+            # Provider-native blocks are retained only in the bounded server
+            # cache used for immediate tool continuation, not exposed through
+            # the Chat Completions response contract.
+            message.pop('_serein_anthropic_content', None)
             return JSONResponse(result,headers=headers_out,background=background_tasks)
         url,headers,payload = request_for(model,body,window_id=window_id,**upstream_session)
         client = httpx.AsyncClient(timeout=120,follow_redirects=False)
@@ -412,7 +416,12 @@ def routes(settings, services, auth):
                             context._merge_stream_message_delta(stream_state,choice.get('delta',{}))
                     yield ('data: '+json.dumps(event,ensure_ascii=False)+'\n\n').encode()
                 if finished and not failed:
-                    completed(context._build_stream_assistant_message(stream_state))
+                    message = context._build_stream_assistant_message(stream_state)
+                    if message is not None and converter:
+                        native_content = converter.native_content()
+                        if native_content:
+                            message['_serein_anthropic_content'] = native_content
+                    completed(message)
                     yield b'data: [DONE]\n\n'
                 elif not failed:
                     yield b'data: {"error":{"message":"Upstream stream ended before completion"}}\n\n'

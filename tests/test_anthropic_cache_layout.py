@@ -4,6 +4,7 @@ from copy import deepcopy
 import pytest
 
 from serein.api.settings import ModelEntry
+from serein.chat_context import ClientContext
 from serein.model_runtime import request_for
 
 
@@ -85,6 +86,66 @@ def test_tool_sequence_and_thinking_config_are_preserved():
     assert body['messages'][-2]['content'][-1]['type'] == 'tool_use'
     assert body['messages'][-1]['content'][0]['type'] == 'tool_result'
     assert body['messages'][-1]['content'][0]['tool_use_id'] == 'call_1'
+
+
+def test_native_tool_result_is_not_dropped_or_promoted_to_system():
+    messages = [
+        {'role':'assistant', 'content':'', 'tool_calls':[
+            {'id':'call_1','type':'function','function':{'name':'lookup','arguments':'{}'}}]},
+        host('tool continuation time'),
+        {'role':'user','content':[
+            {'type':'tool_result','tool_use_id':'call_1','content':'result'}]},
+    ]
+    body = wire(messages)
+    assert 'system' not in body
+    assert body['messages'][-1]['content'][0] == {
+        'type':'tool_result','tool_use_id':'call_1','content':'result'}
+    assert body['messages'][-1]['content'][1] == {
+        'type':'text',
+        'text':'<serein_client_host_data>\ntool continuation time\n</serein_client_host_data>',
+    }
+
+
+def test_cache_breakpoint_supports_tool_use_and_current_model_thresholds():
+    context = ClientContext()
+    assert context._cache_min_tokens_for_model('claude-sonnet-4-6') == 1024
+    assert context._cache_min_tokens_for_model('claude-opus-4-6') == 4096
+    assert context._cache_min_tokens_for_model('claude-opus-4-7') == 2048
+    assert context._cache_min_tokens_for_model('claude-opus-4-8') == 1024
+    assert context._cache_min_tokens_for_model('anthropic.claude-sonnet-5-5-v1:0') == 512
+
+    messages = [
+        {'role':'user','content':'prefix ' * 1000},
+        {'role':'assistant','content':[
+            {'type':'tool_use','id':'call_1','name':'lookup','input':{}}]},
+        {'role':'user','content':'tail ' * 3000},
+    ]
+    assert context._find_cache_breakpoint(
+        messages, model='claude-sonnet-4-6', tail_tokens=4000) == 1
+    context._apply_explicit_anthropic_cache_control(
+        {'messages':messages}, {'type':'ephemeral'},
+        model='claude-sonnet-4-6', tail_tokens=4000)
+    assert messages[1]['content'][0]['cache_control'] == {'type':'ephemeral'}
+
+
+def test_system_and_tools_count_toward_cacheable_prefix():
+    context = ClientContext()
+    messages = [
+        {'role':'user','content':'short prefix'},
+        {'role':'assistant','content':'stable answer'},
+        {'role':'user','content':'tail ' * 3000},
+    ]
+    assert context._find_cache_breakpoint(
+        messages, model='claude-sonnet-4-6', tail_tokens=4000) is None
+    payload = {
+        'system':'system ' * 900,
+        'tools':[{'name':'lookup','description':'tool ' * 300,
+                  'input_schema':{'type':'object'}}],
+        'messages':messages,
+    }
+    context._apply_explicit_anthropic_cache_control(
+        payload, {'type':'ephemeral'}, model='claude-sonnet-4-6', tail_tokens=4000)
+    assert messages[1]['content'][-1]['cache_control'] == {'type':'ephemeral'}
 
 
 def test_default_reserve_and_settings_validation():

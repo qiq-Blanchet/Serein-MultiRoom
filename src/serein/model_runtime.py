@@ -138,11 +138,21 @@ def anthropic_chat_defaults(model, payload):
     if family is None:
         return payload
     result = dict(payload)
-    if result.get('max_tokens') is None and result.get('max_completion_tokens') is None:
-        if result.get('max_output_tokens') is not None:
-            result['max_tokens'] = result['max_output_tokens']
-        else:
-            result['max_tokens'] = ASSUMED_ANTHROPIC_MAX_TOKENS
+    output_limit = next((key for key in ('max_tokens', 'max_completion_tokens', 'max_output_tokens')
+                         if key in result), None)
+    if output_limit is None:
+        result['max_tokens'] = ASSUMED_ANTHROPIC_MAX_TOKENS
+    else:
+        value = result[output_limit]
+        if type(value) is not int or value <= 0:
+            raise ClaudeThinkingOptionsError(output_limit + ' must be a positive integer.')
+        if output_limit != 'max_tokens':
+            result['max_tokens'] = value
+
+    if 'thinking' in result and not isinstance(result['thinking'], dict):
+        raise ClaudeThinkingOptionsError('thinking must be an object.')
+    if 'output_config' in result and not isinstance(result['output_config'], dict):
+        raise ClaudeThinkingOptionsError('output_config must be an object.')
 
     generic = result.get('reasoning_effort')
     if generic is None and isinstance(result.get('reasoning'), dict):
@@ -293,8 +303,55 @@ class AnthropicStream:
     def __init__(self, model):
         self.model=model; self.identifier=''; self.tools={}; self.next_tool=0
         self.usage = {}
+        self.content_blocks = {}
+        self.tool_input_json = {}
+
+    def native_content(self):
+        blocks = []
+        for index in sorted(self.content_blocks):
+            block = deepcopy(self.content_blocks[index])
+            partial = self.tool_input_json.get(index)
+            if partial:
+                try:
+                    block['input'] = json.loads(partial)
+                except (TypeError, ValueError):
+                    # An invalid upstream tool payload is not safe to replay as
+                    # provider-native content. The normal tool-call path will
+                    # still surface it for existing error handling.
+                    return []
+            blocks.append(block)
+        return blocks
+
+    def _remember_content_event(self, event):
+        kind = event.get('type')
+        index = event.get('index', 0)
+        if kind == 'message_start':
+            self.content_blocks = {}
+            self.tool_input_json = {}
+            return
+        if kind == 'content_block_start':
+            block = event.get('content_block')
+            if isinstance(block, dict):
+                self.content_blocks[index] = deepcopy(block)
+                if block.get('type') == 'tool_use':
+                    self.tool_input_json[index] = ''
+            return
+        if kind != 'content_block_delta' or index not in self.content_blocks:
+            return
+        block = self.content_blocks[index]
+        value = event.get('delta', {})
+        typ = value.get('type')
+        if typ == 'text_delta' and block.get('type') == 'text':
+            block['text'] = str(block.get('text') or '') + str(value.get('text') or '')
+        elif typ == 'thinking_delta' and block.get('type') == 'thinking':
+            block['thinking'] = str(block.get('thinking') or '') + str(value.get('thinking') or '')
+        elif typ == 'signature_delta' and block.get('type') == 'thinking':
+            block['signature'] = str(value.get('signature') or '')
+        elif typ == 'input_json_delta' and block.get('type') == 'tool_use':
+            self.tool_input_json[index] = self.tool_input_json.get(index, '') + str(value.get('partial_json') or '')
 
     def convert(self, event):
+        self._remember_content_event(event)
         kind=event.get('type'); delta={}; finish=None; usage=None
         index=event.get('index',0)
         if kind=='error':

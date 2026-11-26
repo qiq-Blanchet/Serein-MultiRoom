@@ -299,7 +299,9 @@ def run_update(manager):
     previous = json.loads(state_path.read_text()) if state_path.exists() else {}
     current = previous.get('commit', '')
     print(f'当前提交：{current[:12] if current else "尚未记录（首次接入 Git 更新）"}；{label} 最新：{commit[:12]}')
-    if current == commit and previous.get('phase') == 'complete':
+    if (current == commit and previous.get('phase') == 'complete'
+            and previous.get('repository', REPOSITORY) == source['repository']
+            and previous.get('branch', BRANCH) == source['branch']):
         if previous.get('source_hashes') != source_hashes(root):
             raise ValueError('源码在上次更新后被修改，请先保存；未覆盖本地源码')
         print('当前已是所选来源最新提交，无须重复拉取和构建。')
