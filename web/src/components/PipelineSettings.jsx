@@ -1,11 +1,23 @@
 import {useEffect,useRef,useState} from 'react';
 import {ConversationImport} from './ConversationImport.jsx';
 import {instanceSettings} from '../storage/instanceStore.js';
-import {PendingMaterials} from './PendingMaterials.jsx';
+import {PendingMaterials,displayPipelineReason} from './PendingMaterials.jsx';
 
-export function PipelineSettings({onOpenSummary}) {
+function progressMessage(report) {
+  if(report.stage==='done')return '已完成整理。';
+  if(report.stage==='empty')return '目前没有已进入整理的原话。';
+  if(report.stage==='blocked')return '当前整理已暂停或受阻，暂不估算剩余时间。';
+  const stage=report.stage==='routing'?'归线':'结算';
+  if(report.eta_reliable)return `${stage}阶段预计还需约 ${report.eta_human}（按近期速度估算，不含后续阶段）。`;
+  if(report.eta_reason==='stalled')return `${stage}阶段近期没有进展，暂不估算剩余时间。`;
+  if(report.eta_reason==='paused_or_throttled')return `${stage}阶段近期没有新的处理记录，暂不估算剩余时间。`;
+  return `${stage}阶段近期样本不足，暂不估算剩余时间。`;
+}
+
+export function PipelineSettings({onOpenSummary,active=true}) {
   const [task,setTask]=useState(null),[output,setOutput]=useState(''),[status,setStatus]=useState(''),[busy,setBusy]=useState(false);
   const [work,setWork]=useState(null);
+  const [progressReport,setProgressReport]=useState(null),[progressBusy,setProgressBusy]=useState(false);
   const [limits,setLimits]=useState(null);
   const mounted=useRef(true),polling=useRef(false),rebuildDialog=useRef(null),restoreDialog=useRef(null);
   const [rebuildTarget,setRebuildTarget]=useState('');
@@ -41,19 +53,28 @@ export function PipelineSettings({onOpenSummary}) {
     return result;
   }
   function accept(result){setWork(result);setTask(result.status==='awaiting_agent'?result.result:null);}
+  async function showProgress() {
+    setProgressBusy(true);
+    try {setProgressReport(await call('progress'));setStatus('');}
+    catch(error){setStatus(error.message);}finally{setProgressBusy(false);}
+  }
   useEffect(()=>{
     mounted.current=true;
+    return()=>{mounted.current=false;};
+  },[]);
+  useEffect(()=>{
+    if(!active)return;
     instanceSettings().then(value=>{if(mounted.current){setLimits(value.pipeline);}}).catch(error=>{if(mounted.current)setStatus(error.message);});
     const refresh=async()=>{
-      if(polling.current)return;polling.current=true;
+      if(document.hidden||polling.current)return;polling.current=true;
       try{const result=await call('status');if(mounted.current)accept(result);}
       catch(error){if(mounted.current)setStatus(error.message);}finally{polling.current=false;}
     };
     const saved=event=>setLimits(event.detail.pipeline);window.addEventListener('serein:settings-saved',saved);
     refresh();const timer=setInterval(refresh,2000);
     const visible=()=>{if(!document.hidden)refresh();};document.addEventListener('visibilitychange',visible);
-    return()=>{window.removeEventListener('serein:settings-saved',saved);mounted.current=false;clearInterval(timer);document.removeEventListener('visibilitychange',visible);};
-  },[]);
+    return()=>{window.removeEventListener('serein:settings-saved',saved);clearInterval(timer);document.removeEventListener('visibilitychange',visible);};
+  },[active]);
   async function next() {
     if(busy||running)return;
     setBusy(true);setStatus(runtimeContractRepair?'正在请求继续整理其他聊天；旧计划仍等待明确重建…':needsRepair?'正在请求重新校验归线材料…':'正在提交后台整理任务…');
@@ -150,13 +171,6 @@ export function PipelineSettings({onOpenSummary}) {
     const url=URL.createObjectURL(new Blob([JSON.stringify(task,null,2)],{type:'application/json'}));
     const link=document.createElement('a');link.href=url;link.download=task.role+'-task.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
-  async function downloadAttempt(id){
-    try{
-      const result=await call('attempts/'+id);
-      const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));
-      const link=document.createElement('a');link.href=url;link.download='pipeline-attempt-'+id+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-    }catch(error){setStatus(error.message);}
-  }
   async function submit() {
     setBusy(true);
     try {const saved=await call('submit',{job_id:task.job_id,output:JSON.parse(output)});setTask(null);setOutput('');accept(await call('next',{include_recent:true}));setStatus(saved.status==='host_deferred'?'Curator 再次遗漏原话，所在审阅范围已留待下轮；原话没有跳过。':'结果已校验并保存，后台继续下一步。');}
@@ -164,7 +178,9 @@ export function PipelineSettings({onOpenSummary}) {
   }
   return <section className="settings-group"><div className="settings-group__heading"><h3>原话整理</h3>
     <p>归线 → 切分与转录 → Event 写作。在“自动摘要管理”页选择执行方式、三阶段模型和整理参数。Scene 由聊天中的 agent 主动写。</p></div>
-    <ConversationImport onImported={()=>setStatus('原话已导入。点击继续整理，进入下一步。')} />
+    <ConversationImport active={active} onImported={()=>setStatus('原话已导入。点击继续整理，进入下一步。')} />
+    <p><button type="button" className="settings-link" disabled={progressBusy} onClick={showProgress}>查看 Event 整理进度与预计时间</button></p>
+    {progressReport&&<p role="status">本次查看：原话档案 {progressReport.archived} 条 · 已进入整理 {progressReport.admitted} 条 · 已归线 {progressReport.routed} 条 · 已结算 {progressReport.processed} 条 · 当前阶段剩余 {progressReport.pending} 条。{progressMessage(progressReport)}</p>}
     {limits&&<p>{autoMessage}</p>}
     {work?.auto_boundary_originals>0&&<p>有 {work.auto_boundary_originals} 条原话在开启自动整理时被划到边界外。它们仍保存在原话档案中，点击“继续整理”不会处理这些原话。<button type="button" disabled={busy||running} onClick={()=>restoreDialog.current.showModal()}>恢复并整理这批原话</button></p>}
     <button type="button" className="settings-link" onClick={onOpenSummary}>自动摘要管理</button>
@@ -178,23 +194,23 @@ export function PipelineSettings({onOpenSummary}) {
       {candidateOverflows.map(item=><p key={item.track_id} className="import-error">Track <code>{item.track_id}</code> 有 {item.eligible_active_leaf_count} 条 active Event leaves，超过上限 {item.limit}；本批未调用 Curator 或 Writer。请先归档误归线或不再需要的 Event，或人工安全合并相关 leaves。</p>)}
       {work.result?.skipped>0&&<p>本批跳过 {work.result.skipped} 条原话，原始记录仍保留。</p>}
       {work.result?.missing_images?.length>0&&<p>已跳过 {work.result.missing_images.length} 个缺失的图片附件；原话文字保留，未猜补图片内容。</p>}
-      {(work.failed_images||[]).map(image=><p className="import-error" key={image.sha256}>
-        图片 {image.sha256.slice(0,8)} 转录失败三次，已暂停自动重试；依赖它的原话仍保留。
-        <button type="button" disabled={busy||running} onClick={()=>retryImage(image.sha256)}>重试这张图片</button></p>)}
+      {work.failed_images?.length>0&&<details className="settings-disclosure"><summary>图片转录记录（{work.failed_images.length}）</summary>
+        <p>缺少转录的图片只记录张数，文字照常参与整理。</p>
+        {work.failed_images.map(image=><p key={image.sha256}>图片 {image.sha256.slice(0,8)}{' '}
+          <button type="button" disabled={busy||running} onClick={()=>retryImage(image.sha256)}>重试这张图片</button></p>)}
+      </details>}
       {holds.filter(item=>item.hold_status!=='paused_failure').map(item=><p className="import-error" key={item.batch_id}>
-        聊天 <code>{item.scope}</code>：{item.hold_status==='needs_repair'?(item.repair_kind==='runtime_contract'?'旧计划版本已变化':'归线证据待修复'):item.hold_status==='retry_wait'?'等待有限重试':'归线尚未完成'}。{item.repair_kind==='runtime_contract'?'重新校验不会迁移旧计划；请先查看重建确认。':item.reason}
+        聊天 <code>{item.scope}</code>：{item.hold_status==='needs_repair'?(item.repair_kind==='runtime_contract'?'旧计划版本已变化':'归线证据待修复'):item.hold_status==='retry_wait'?'等待有限重试':'归线尚未完成'}。{item.repair_kind==='runtime_contract'?'重新校验不会迁移旧计划；请先查看重建确认。':displayPipelineReason(item.reason)}
         {item.next_retry_at&&<> 下次重试：{new Date(item.next_retry_at).toLocaleString()}。</>}
         {' '}原文保留，此聊天按序等待，其他聊天可继续；当日尚未全部结算。
         {item.hold_status==='needs_repair'&&<button type="button" disabled={busy||running} onClick={()=>beginRebuild(item.batch_id)}>查看重建确认</button>}
         {recoveryButtons(item.batch_id)}
       </p>)}
-      {(work.paused_batches||[]).map(batch=><p className="import-error" key={batch.batch_id}>本批已暂停：{batch.reason}。同一聊天的后续整理等待它恢复，其他聊天可继续。<button type="button" disabled={busy||running} onClick={()=>retryBatch(batch.batch_id)}>重试此批次</button>{recoveryButtons(batch.batch_id)}</p>)}
+      {(work.paused_batches||[]).map(batch=><p className="import-error" key={batch.batch_id}>本批已暂停：{displayPipelineReason(batch.reason)} 同一聊天的后续整理等待它恢复，其他聊天可继续。<button type="button" disabled={busy||running} onClick={()=>retryBatch(batch.batch_id)}>重试此批次</button>{recoveryButtons(batch.batch_id)}</p>)}
       {failedBatch&&<p className="import-error">批次：<code>{failedBatch}</code>。{recoveryButtons(failedBatch)}</p>}
-      {failure&&<p className="import-error">{needsRepair?'待修复原因':'失败原因'}：{failure}</p>}
+      {failure&&<p className="import-error">{needsRepair?'待修复原因':'失败原因'}：{displayPipelineReason(failure)}</p>}
       {needsRepair&&<p>批次：<code>{repairHold?.batch_id||work.result?.batch_id||work.batch_id}</code>。原话与已完成步骤保留。{runtimeContractRepair?'当前程序与冻结旧计划的版本不一致，重新校验不会迁移旧计划。请查看重建确认，明确同意后才重新归线；也可继续整理其他聊天。':'先重新校验以恢复历史归线；无法恢复时，可明确作废本批计划并重新归线。'}不会跳过原话或删除已保存的 Event。</p>}
       {task&&<p>等待 {stages[task.role]||task.role}：下载任务交给 Agent，再提交返回的 JSON。</p>}</div>}
-    {work?.attempts?.length>0&&<details><summary>模型返回与纠错记录</summary>{work.attempts.map(item=><p key={item.id}>
-      第 {item.attempt} 次：{item.error||'校验通过'} · {item.output_chars} 字符 <button type="button" onClick={()=>downloadAttempt(item.id)}>下载返回</button></p>)}</details>}
     <div className="settings-actions"><button type="button" disabled={busy||running} onClick={next}>{running?'后台整理中…':runtimeContractRepair?'继续整理其他聊天':needsRepair?'重新校验并继续':'继续整理'}</button>
       {needsRepair&&<button type="button" disabled={busy||running} onClick={beginRebuild}>{runtimeContractRepair?'查看重建确认':'作废本批计划并重新归线'}</button>}
       {task&&<button type="button" onClick={download}>下载 agent 任务</button>}</div>
