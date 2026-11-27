@@ -1474,7 +1474,13 @@ async def job(database,batch,request,key,runner):
                         if reasoning_tokens is not None:
                             suffix+=f'，其中思考使用 {reasoning_tokens} tokens'
                     raise ValueError('模型未返回最终 JSON 内容'+suffix)
-                output=prepare_stage_output(request,json.loads(raw))
+                parse_text=raw
+                if request['role']=='event_writer' and isinstance(raw,str):
+                    # Accept a single complete JSON Markdown fence, not arbitrary
+                    # prose or a repaired/truncated document. Keep raw for audit.
+                    fenced=re.fullmatch(r'```json[ \t]*\r?\n(.*?)\r?\n```',raw.strip(),re.IGNORECASE|re.DOTALL)
+                    if fenced:parse_text=fenced.group(1)
+                output=prepare_stage_output(request,json.loads(parse_text))
                 validate(request,output)
                 record_attempt(database,identifier,raw,model=model['model'],prompt_chars=prompt_chars)
                 break

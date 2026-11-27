@@ -512,6 +512,114 @@ def test_writer_api_unwraps_json_object_without_retry(settings, monkeypatch):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize('format', ['plain', 'fenced', 'fenced_crlf'])
+def test_writer_api_accepts_complete_json_fence_without_retry(settings, monkeypatch, format):
+    ingest(settings)
+    curator = curator_task(settings)
+    p.submit(settings.database, curator['job_id'], output_for('event_curator', curator['request']))
+    save_settings(settings.database, {
+        'models': [{'id': 'local', 'model': 'synthetic', 'base_url': 'http://127.0.0.1:9/v1'}],
+        'assignments': {role: 'local' for role in p.ROLES},
+        'pipeline': {'execution_mode': 'api'}})
+    replies = []
+    async def complete(model, payload):
+        with Store(settings.database, read_only=True) as store:
+            request = json.loads(store.conn.execute(
+                "SELECT request_json FROM pipeline_jobs WHERE role LIKE 'event_writer%' ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()[0])
+        raw = json.dumps(output_for('event_writer', request))
+        if format == 'fenced':
+            raw = '```json\n' + raw + '\n```'
+        elif format == 'fenced_crlf':
+            raw = ' \r\n```JSON \r\n' + raw + '\r\n```\r\n '
+        replies.append(raw)
+        return {'choices': [{'message': {'content': raw}}]}
+    monkeypatch.setattr('serein.model_runtime.complete', complete)
+    assert asyncio.run(p.advance(settings.database, include_recent=True))['events'] == 1
+    assert len(replies) == 1
+    with Store(settings.database, read_only=True) as store:
+        attempt = store.conn.execute(
+            "SELECT a.output_text,a.error FROM pipeline_attempts a JOIN pipeline_jobs j ON a.job_id=j.id "
+            "WHERE j.role LIKE 'event_writer%'").fetchone()
+        assert (attempt['output_text'], attempt['error']) == (replies[0], '')
+        assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0] == 2
+
+
+@pytest.mark.parametrize('format', ['truncated', 'plain_truncated', 'unfinished_fence', 'prose', 'trailing_prose', 'multiple_fences', 'bad_evidence'])
+def test_writer_api_rejects_incomplete_json_and_invalid_evidence(settings, monkeypatch, format):
+    ingest(settings)
+    curator = curator_task(settings)
+    p.submit(settings.database, curator['job_id'], output_for('event_curator', curator['request']))
+    save_settings(settings.database, {
+        'models': [{'id': 'local', 'model': 'synthetic', 'base_url': 'http://127.0.0.1:9/v1'}],
+        'assignments': {role: 'local' for role in p.ROLES},
+        'pipeline': {'execution_mode': 'api'}})
+    async def complete(model, payload):
+        with Store(settings.database, read_only=True) as store:
+            request = json.loads(store.conn.execute(
+                "SELECT request_json FROM pipeline_jobs WHERE role LIKE 'event_writer%' ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()[0])
+        output = output_for('event_writer', request)
+        if format == 'bad_evidence':
+            output['sentence_evidence'][0]['source_spans'][0]['quote'] = 'invented quote'
+        raw = json.dumps(output)
+        fenced = '```json\n' + raw + '\n```'
+        if format == 'truncated':
+            fenced = '```json\n' + raw[:-1] + '\n```'
+        elif format == 'plain_truncated':
+            fenced = raw[:-1]
+        elif format == 'unfinished_fence':
+            fenced = '```json\n' + raw
+        elif format == 'prose':
+            fenced = 'Here is the JSON:\n' + fenced
+        elif format == 'trailing_prose':
+            fenced += '\nDone.'
+        elif format == 'multiple_fences':
+            fenced += '\n' + fenced
+        return {'choices': [{'message': {'content': fenced}}]}
+    monkeypatch.setattr('serein.model_runtime.complete', complete)
+    asyncio.run(p.advance(settings.database, include_recent=True))
+    with Store(settings.database, read_only=True) as store:
+        jobs = store.conn.execute("SELECT output_json FROM pipeline_jobs WHERE role LIKE 'event_writer%'").fetchall()
+        assert jobs and all(row['output_json'] is None for row in jobs)
+        attempts = store.conn.execute(
+            "SELECT a.error FROM pipeline_attempts a JOIN pipeline_jobs j ON a.job_id=j.id "
+            "WHERE j.role LIKE 'event_writer%'").fetchall()
+        assert attempts and all(row['error'] for row in attempts)
+        if format == 'bad_evidence':
+            assert all('逐字' in row['error'] for row in attempts)
+        else:
+            assert all('无法解析的 JSON' in row['error'] for row in attempts)
+        assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('role', ['track_router', 'event_curator'])
+def test_non_writer_api_still_rejects_json_fences(settings, monkeypatch, role):
+    ingest(settings)
+    if role == 'event_curator':
+        curator_task(settings)
+    save_settings(settings.database, {
+        'models': [{'id': 'local', 'model': 'synthetic', 'base_url': 'http://127.0.0.1:9/v1'}],
+        'assignments': {role: 'local' for role in p.ROLES},
+        'pipeline': {'execution_mode': 'api'}})
+    async def complete(model, payload):
+        with Store(settings.database, read_only=True) as store:
+            request = json.loads(store.conn.execute(
+                'SELECT request_json FROM pipeline_jobs WHERE role LIKE ? AND output_json IS NULL ORDER BY rowid DESC LIMIT 1',
+                (role + '%',)).fetchone()[0])
+        raw = json.dumps(output_for(role, request))
+        return {'choices': [{'message': {'content': '```json\n' + raw + '\n```'}}]}
+    monkeypatch.setattr('serein.model_runtime.complete', complete)
+    asyncio.run(p.advance(settings.database, include_recent=True))
+    with Store(settings.database, read_only=True) as store:
+        jobs = store.conn.execute('SELECT output_json FROM pipeline_jobs WHERE role LIKE ?', (role+'%',)).fetchall()
+        assert jobs and all(row['output_json'] is None for row in jobs)
+        attempts = store.conn.execute(
+            'SELECT a.error FROM pipeline_attempts a JOIN pipeline_jobs j ON a.job_id=j.id WHERE j.role LIKE ?',
+            (role+'%',)).fetchall()
+        assert attempts and all('无法解析的 JSON' in row['error'] for row in attempts)
+
+
 def test_parked_correction_is_readable_but_not_owned(settings):
     raw_archive(settings).ingest([
         {'source_event_id':'u','session_id':'one','role':'user','text':'Meet at three','created_at':'2025-02-02T02:00:00+08:00'},
