@@ -15,7 +15,7 @@ globalThis.MessageChannel=class extends NativeChannel{constructor(){super();chan
 const directory=await mkdtemp(join(tmpdir(),'serein-pending-dom-'));
 const output=await build({stdin:{contents:`import React,{act} from 'react';import {createRoot} from 'react-dom/client';import {PendingMaterials} from './src/components/PendingMaterials.jsx';export {act};export function mount(work){const root=createRoot(document.getElementById('root'));root.render(<PendingMaterials work={work}/>);return root;}`,resolveDir:webRoot,loader:'jsx'},jsx:'automatic',bundle:true,platform:'node',format:'esm',write:false,define:{'process.env.NODE_ENV':'"development"'}});
 const path=join(directory,'bundle.mjs');await writeFile(path,output.outputFiles[0].text);
-const {act,mount}=await import(pathToFileURL(path));let root,busy=false,skipped=false;const requests=[];
+const {act,mount}=await import(pathToFileURL(path));let root,busy=false,skipped=false,previewWait=null,previewError=null,skipError=null,statusError=null,staleStatus=false;const requests=[];
 const item={id:17,batch_id:'synthetic',status:'open',kind:'writing',reason:'Synthetic writer failure',summary:'Book club',originals:2,original_chars:100,can_skip:true,
   locator:{source:'synthetic',session_id:'book-chat',first_at:'2025-01-01T00:00:00Z',last_at:'2025-01-01T00:01:00Z',first_raw_id:101,last_raw_id:102,preview:'FIRST_SNIPPET',longest_message:{id:102,role:'assistant',chars:2000}},
   resolved_event_ids:[],last_attempt:{role:'event_writer:0:0',error:'Synthetic error',output_chars:20}};
@@ -25,15 +25,17 @@ globalThis.fetch=async(url,options={})=>{
     {id:102,role:'assistant',content:'L'.repeat(2000)}],last_attempt:{output_text:'SYNTHETIC_BAD_OUTPUT'}};
   else if(url.endsWith('/resume-pending'))result={status:busy?'busy':'resumed'};
   else if(url.endsWith('/next'))result={status:'queued'};
+  else if(url.endsWith('/status')&&statusError)return {ok:false,json:async()=>({detail:statusError})};
+  else if(url.endsWith('/status')&&staleStatus)result={pending_materials:[item,{...item,id:18,batch_id:'other'}]};
   else if(url.endsWith('/status'))result={pending_materials:[{...item,status:skipped?'resolved_skipped':'resolved',resolved_event_ids:skipped?[]:['event-synthetic']}]};
-  else if(url.endsWith('/recovery-preview'))result={pending_id:17,batch_id:'synthetic',originals:2,original_chars:100,max_input_chars:5000,batches:2,oversized_batches:0,can_rebatch:true};
+  else if(url.endsWith('/recovery-preview')){if(previewWait)await previewWait;if(previewError)return {ok:false,json:async()=>({detail:previewError})};result={pending_id:17,batch_id:'synthetic',originals:2,original_chars:100,max_input_chars:5000,batches:2,oversized_batches:0,can_rebatch:true};}
   else if(url.endsWith('/rebatch'))result={status:'rebatched'};
-  else if(url.endsWith('/skip-batch')){skipped=true;result={status:'skipped_batch',skipped_originals:2};}
+  else if(url.endsWith('/skip-batch')){if(skipError)return {ok:false,json:async()=>({detail:skipError})};skipped=true;result={status:'skipped_batch',skipped_originals:2};}
   else throw new Error('Unexpected request '+url);
   return {ok:true,json:async()=>structuredClone(result)};
 };
 const button=text=>[...document.querySelectorAll('button')].find(node=>node.textContent===text);
-async function render(status,attempts=[]){if(root)await act(async()=>root.unmount());requests.length=0;skipped=false;await act(async()=>{root=mount({status,attempts,pending_materials:[item]});});}
+async function render(status,attempts=[]){if(root)await act(async()=>root.unmount());requests.length=0;skipped=false;previewWait=previewError=skipError=statusError=null;staleStatus=false;await act(async()=>{root=mount({status,attempts,pending_materials:[item]});});}
 async function click(text){await act(async()=>{button(text).click();});}
 after(async()=>{if(root)await act(async()=>root.unmount());dom.window.close();stop();for(const c of channels){c.port1.close();c.port2.close();}globalThis.MessageChannel=NativeChannel;await rm(directory,{recursive:true,force:true});});
 test('pending summaries do not fetch originals until explicitly opened',async()=>{
@@ -92,5 +94,55 @@ test('skipping is limited to the selected batch and requires a preview plus conf
 test('a running task still permits material inspection while preventing competing recovery actions',async()=>{
   await render('running');
   for(const label of ['从失败步骤继续','重新切分，保留归线','按更小材料重新整理','跳过本批，保留原话'])assert.equal(button(label).disabled,true);
+  assert.match(document.querySelector('.pending-material').textContent,/后台正在整理，暂不能跳过/);
   await click('查看原话与最后输出');assert.equal(requests.length,1);
+});
+
+test('skip preview immediately shows progress on its own card and focuses the confirmation',async()=>{
+  await render();
+  let release;previewWait=new Promise(resolve=>{release=resolve;});
+  await click('跳过本批，保留原话');
+  try{
+    const card=document.querySelector('.pending-material');
+    assert.match(card.textContent,/正在.*跳过.*预览/);
+    assert(!requests.some(r=>r.url.endsWith('/skip-batch')));
+  }finally{await act(async()=>release());}
+  const confirmation=document.querySelector('[aria-label="确认跳过这批材料"]');
+  assert.equal(document.activeElement,confirmation);
+  assert(button('确认仅跳过本批'));
+});
+
+test('skip preview and submission errors appear at the selected material, not below the list',async()=>{
+  await render();
+  previewError='原话已变化，请刷新并核对批次';
+  await click('跳过本批，保留原话');
+  assert(document.querySelector('.pending-material').textContent.includes(previewError));
+  assert(!requests.some(r=>r.url.endsWith('/skip-batch')));
+  previewError=null;
+  await click('跳过本批，保留原话');
+  skipError='请稍后重试本批';
+  await click('确认仅跳过本批');
+  assert(document.querySelector('.pending-material').textContent.includes(skipError));
+  assert(button('确认仅跳过本批'));
+  assert(!requests.some(r=>r.url.endsWith('/next')));
+});
+
+test('a confirmed skip leaves the open list even if refreshing work fails',async()=>{
+  await render();
+  statusError='Synthetic status request failed';
+  await click('跳过本批，保留原话');
+  await click('确认仅跳过本批');
+  assert.equal(document.querySelector('.pending-material'),null);
+  assert.match(document.body.textContent,/已手动跳过，原话保留/);
+  assert.match(document.body.textContent,/已跳过这批 2 条原话/);
+});
+
+test('an older status response cannot reopen the confirmed skip or hide another pending batch',async()=>{
+  await render();
+  staleStatus=true;
+  await click('跳过本批，保留原话');
+  await click('确认仅跳过本批');
+  assert.equal(document.querySelector('[aria-label="待办 17"]'),null);
+  assert(document.querySelector('[aria-label="待办 18"]'));
+  assert.match(document.body.textContent,/待办 17 · 已手动跳过，原话保留/);
 });

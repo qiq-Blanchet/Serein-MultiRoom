@@ -23,15 +23,21 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
   const [items,setItems]=useState([]),[error,setError]=useState(''),[busy,setBusy]=useState(false),[detail,setDetail]=useState(null);
   const [preview,setPreview]=useState(null),[limit,setLimit]=useState(5000),[notice,setNotice]=useState('');
   const [observedWork,setObservedWork]=useState(null),[loadingId,setLoadingId]=useState(null),[focusRaw,setFocusRaw]=useState(null);
-  const readSequence=useRef(0),material=useRef(null);
+  const [skipFeedback,setSkipFeedback]=useState(null);
+  const readSequence=useRef(0),material=useRef(null),skipConfirmation=useRef(null);
+  const confirmedSkips=useRef(new Set());
+  // Do not reopen a confirmed skip just because an older status poll arrives late.
+  function settledItems(result){return (result?.pending_materials||[]).map(item=>
+    confirmedSkips.current.has(item.batch_id)&&['open','running'].includes(item.status)
+      ?{...item,status:'resolved_skipped',can_skip:false}:item);}
   const running=['running','queued'].includes((work??observedWork)?.status);
   async function call(path,body){
     const response=await fetch('/__serein/pipeline/'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const result=await response.json();if(!response.ok)throw new Error(result.detail||'材料暂未读取，请稍后重试。');return result;
   }
-  function accept(result){setItems(result.pending_materials||[]);setObservedWork(result);onStatus?.(result);}
+  function accept(result){const updated={...result,pending_materials:settledItems(result)};setItems(updated.pending_materials);setObservedWork(updated);onStatus?.(updated);return updated;}
   useEffect(()=>{
-    if(work!==undefined){setItems(work?.pending_materials||[]);setObservedWork(work);return;}
+    if(work!==undefined){setItems(settledItems(work));setObservedWork(work);return;}
     let alive=true,pending=false;
     const refresh=async()=>{
       if(document.hidden||pending)return;
@@ -43,6 +49,17 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
     refresh();const timer=setInterval(refresh,3000);return()=>{alive=false;clearInterval(timer);};
   },[work,onStatus]);
   useEffect(()=>()=>{readSequence.current++;},[]);
+  useEffect(()=>{
+    const target=skipConfirmation.current;
+    if(!target)return;
+    // Keep the horizontal settings carousel in place while revealing the confirmation.
+    const panel=target.closest('[role="tabpanel"]');
+    if(panel){
+      const bounds=target.getBoundingClientRect(),frame=panel.getBoundingClientRect();
+      if(bounds.top<frame.top||bounds.bottom>frame.bottom)panel.scrollTop+=bounds.top-frame.top-12;
+    }
+    target.focus({preventScroll:true});
+  },[preview?.pending_id,preview?.action]);
   useEffect(()=>{
     if(!detail||!material.current)return;
     const target=focusRaw===null?material.current:[...material.current.querySelectorAll('[data-raw-id]')].find(node=>node.dataset.rawId===String(focusRaw));
@@ -76,7 +93,7 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
     setNotice(message);setDetail(null);
     try{await call('next',{include_recent:true});}
     catch(e){setNotice(message+' 后续整理未启动：'+e.message);}
-    const status=await call('status');accept(status);onChange?.(status);
+    const status=accept(await call('status'));onChange?.(status);
   }
   async function resume(id,replan=false){
     if(busy||running)return;setBusy(true);setError('');setNotice('');
@@ -87,20 +104,40 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
     }catch(e){setError(e.message);}finally{setBusy(false);}
   }
   async function previewRecovery(item,action='split'){
-    if(busy||running)return;setBusy(true);setError('');
-    try{setPreview({...await call('recovery-preview',{batch_id:item.batch_id,...(action==='skip'?{}:{max_input_chars:Number(limit)})}),pending_id:item.id,action});}
-    catch(e){setError(e.message);}finally{setBusy(false);}
+    if(busy||running)return;setBusy(true);setError('');setNotice('');
+    const skip=action==='skip';
+    if(skip){setPreview(null);setSkipFeedback({id:item.id,message:'正在读取跳过预览…'});}
+    else setSkipFeedback(null);
+    try{
+      setPreview({...await call('recovery-preview',{batch_id:item.batch_id,...(skip?{}:{max_input_chars:Number(limit)})}),pending_id:item.id,action});
+      setSkipFeedback(null);
+    }catch(e){
+      if(skip)setSkipFeedback({id:item.id,message:'无法读取跳过预览：'+e.message});
+      else setError(e.message);
+    }finally{setBusy(false);}
   }
   async function recover(){
     if(busy||running||!preview)return;setBusy(true);setError('');setNotice('');
+    const skip=preview.action==='skip';
+    if(skip)setSkipFeedback({id:preview.pending_id,message:'正在跳过本批，原话保留…'});
     try{
-      const skip=preview.action==='skip';
       const result=await call(skip?'skip-batch':'rebatch',{batch_id:preview.batch_id,
         confirm:skip?'SKIP_PIPELINE_BATCH':'REBATCH_PIPELINE_BATCH',...(!skip?{max_input_chars:preview.max_input_chars}:{})});
       if(result.status!==(skip?'skipped_batch':'rebatched'))throw new Error('整理正在运行，请稍后再试。');
       setPreview(null);
-      await continueWork(skip?`已跳过这批 ${result.skipped_originals} 条原话的 Event 整理，原话保留。`:`已拆成 ${result.batches} 批，旧计划与模型结果保留。`);
-    }catch(e){setError(e.message);}finally{setBusy(false);}
+      const message=skip?`已跳过这批 ${result.skipped_originals} 条原话的 Event 整理，原话保留。`:`已拆成 ${result.batches} 批，旧计划与模型结果保留。`;
+      if(skip){
+        confirmedSkips.current.add(preview.batch_id);
+        setSkipFeedback(null);
+        setItems(current=>settledItems({pending_materials:current}));
+        // The skip itself succeeded; a later refresh failure must not undo it.
+        try{await continueWork(message);}
+        catch(e){setNotice(message+' 待办状态暂未刷新：'+e.message);}
+      }else await continueWork(message);
+    }catch(e){
+      if(skip)setSkipFeedback({id:preview.pending_id,message:'暂未跳过本批：'+e.message});
+      else setError(e.message);
+    }finally{setBusy(false);}
   }
   const open=items.filter(item=>['open','running'].includes(item.status));
   const finished=items.filter(item=>!['open','running'].includes(item.status));
@@ -117,6 +154,7 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
       {attempts.map(attempt=><p key={attempt.id}><AttemptSummary attempt={attempt}/>{' '}
         <button type="button" onClick={()=>downloadAttempt(attempt.id)}>下载返回</button></p>)}
     </details>}
+    {notice&&<p role="status">{notice}</p>}
     {!open.length&&<p>暂无待处理材料。</p>}
     {open.length>0&&<p className="pending-materials__notice">有 {open.length} 批材料待处理。下方字符数是原话长度；“本次提示词”还包含规则和候选内容。</p>}
     {open.map(item=><article key={item.id} className="pending-material" aria-label={`待办 ${item.id}`}><h4>待办 {item.id} · {item.kind==='writing'?'已切分待补写':'待归线／切分修复'}</h4>
@@ -137,16 +175,18 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
         <button type="button" disabled={busy||running||item.status==='running'} onClick={()=>previewRecovery(item)}>按更小材料重新整理</button>
         {item.can_skip&&<button type="button" disabled={busy||running||item.status==='running'} onClick={()=>previewRecovery(item,'skip')}>跳过本批，保留原话</button>}
       </div>
-      <p className="pending-material__meta">继续会保留成功步骤；重新整理会生成新方案，可能再次调用模型。旧计划与输出可在记录中查看。</p>
-      {preview?.pending_id===item.id&&<div className="pending-recovery" role="region" aria-label={preview.action==='skip'?'确认跳过这批材料':'拆分预览'}>
+      {(running||item.status==='running')&&<p className="pending-material__meta" role="status">后台正在整理，暂不能跳过或恢复批次；请等当前整理结束。</p>}
+      {skipFeedback?.id===item.id&&<p role="status">{skipFeedback.message}</p>}
+      {preview?.pending_id===item.id&&<div className="pending-recovery" role="region" ref={preview.action==='skip'?skipConfirmation:undefined} tabIndex={preview.action==='skip'?-1:undefined} aria-label={preview.action==='skip'?'确认跳过这批材料':'拆分预览'}>
         {preview.action==='skip'?<><h5>仅跳过这批材料的 Event 整理？</h5><p>共 {preview.originals} 条原话、{preview.original_chars?.toLocaleString()} 字符，将标记为手动跳过。原话和已有 Event 保留；这批原话不会再自动生成 Event。</p></>:<>
           <label className="settings-field"><span>每批原话字符上限</span><input type="number" min="2000" max="100000" value={limit} onChange={event=>setLimit(event.target.value)}/></label>
           <button type="button" disabled={busy||running} onClick={()=>previewRecovery(item)}>更新拆分预览</button><p>保留完整问答，拆成 {preview.batches} 批；其中 {preview.oversized_batches} 批仍超出目标。</p>
           {preview.batch_chars&&<p>各批原话字符数：{preview.batch_chars.map(value=>value.toLocaleString()).join('、')}。</p>}
           {!preview.can_rebatch&&<p>这批材料无法按当前目标拆成更多完整问答；可调整目标，或重新归线后继续。</p>}
         </>}
-        <div className="settings-actions"><button type="button" disabled={busy||running||(preview.action!=='skip'&&(!preview.can_rebatch||Number(limit)!==preview.max_input_chars))} onClick={recover}>{preview.action==='skip'?'确认仅跳过本批':'确认拆小并整理'}</button><button type="button" disabled={busy} onClick={()=>setPreview(null)}>取消</button></div>
+        <div className="settings-actions"><button type="button" disabled={busy||running||(preview.action!=='skip'&&(!preview.can_rebatch||Number(limit)!==preview.max_input_chars))} onClick={recover}>{preview.action==='skip'?'确认仅跳过本批':'确认拆小并整理'}</button><button type="button" disabled={busy} onClick={()=>{setPreview(null);setSkipFeedback(null);}}>取消</button></div>
       </div>}
+      <p className="pending-material__meta">继续会保留成功步骤；重新整理会生成新方案，可能再次调用模型。旧计划与输出可在记录中查看。</p>
     </article>)}
     {finished.length>0&&<details><summary>已处理记录（{finished.length}）</summary>{finished.map(item=><p key={item.id}>待办 {item.id} · {item.status==='resolved_routing'?'已恢复归线':item.status==='resolved_skipped'?'已手动跳过，原话保留':item.resolved_event_ids.length?'已保存／承接为 '+item.resolved_event_ids.join('、'):'已处理'} <button type="button" onClick={()=>read(item.id)}>查看记录</button></p>)}</details>}
     {detail&&<section className="pending-material-detail" ref={material} tabIndex={-1} aria-label={`待办 ${detail.id} 的原话与最后输出`}>
@@ -163,7 +203,6 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
         {lastOutput.output_text?<pre className="pending-output">{lastOutput.output_text}</pre>:<p>这次没有收到模型输出正文，错误记录已保留。</p>}</>:<p>这批还没有模型返回记录。</p>}
       <details className="settings-disclosure"><summary>阶段结果与技术记录</summary><p>批次编号：<code>{detail.batch_id||'未记录'}</code> · 已保留 {detail.jobs?.filter(job=>job.output!==null).length??0} 个阶段结果。</p><pre className="pending-output">{JSON.stringify(detail,null,2)}</pre></details>
     </section>}
-    {notice&&<p role="status">{notice}</p>}
     {error&&<p role="status">{error}</p>}
   </section>;
 }
