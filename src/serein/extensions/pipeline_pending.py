@@ -112,7 +112,7 @@ def entries(conn, *, limit=100):
         result.append({key:row[key] for key in ('id','batch_id','scope','status','kind','reason','updated_at')} |
             {'source_ids':ids,'originals':len(ids),'original_chars':sum(len(m['content']) for m in source),
              'locator':source_locator(source),'batch_status':row['batch_status'],
-             'can_skip':row['batch_status'] in ('pending','paused_failure','retry_wait','routing_only','needs_repair','waiting_materials'),
+             'can_skip':row['batch_status'] in ('pending','paused_failure','retry_wait','routing_only','needs_repair','waiting_materials','done') and row['status'] in ('open','running'),
              'summary':'；'.join(str(c.get('subject',''))+': '+str(c.get('throughline','')) for c in cards)[:240],
              'last_attempt':dict(attempt) if attempt else None,
              'resolved_event_ids':json.loads(row['resolved_event_ids_json'])})

@@ -15,7 +15,7 @@ globalThis.MessageChannel=class extends NativeChannel{constructor(){super();chan
 const directory=await mkdtemp(join(tmpdir(),'serein-pending-dom-'));
 const output=await build({stdin:{contents:`import React,{act} from 'react';import {createRoot} from 'react-dom/client';import {PendingMaterials} from './src/components/PendingMaterials.jsx';export {act};export function mount(work){const root=createRoot(document.getElementById('root'));root.render(<PendingMaterials work={work}/>);return root;}`,resolveDir:webRoot,loader:'jsx'},jsx:'automatic',bundle:true,platform:'node',format:'esm',write:false,define:{'process.env.NODE_ENV':'"development"'}});
 const path=join(directory,'bundle.mjs');await writeFile(path,output.outputFiles[0].text);
-const {act,mount}=await import(pathToFileURL(path));let root,busy=false,skipped=false,previewWait=null,previewError=null,skipError=null,statusError=null,staleStatus=false;const requests=[];
+const {act,mount}=await import(pathToFileURL(path));let root,busy=false,skipped=false,previewWait=null,previewError=null,skipError=null,statusError=null,staleStatus=false,alreadyProcessed=false;const requests=[];
 const item={id:17,batch_id:'synthetic',status:'open',kind:'writing',reason:'Synthetic writer failure',summary:'Book club',originals:2,original_chars:100,can_skip:true,
   locator:{source:'synthetic',session_id:'book-chat',first_at:'2025-01-01T00:00:00Z',last_at:'2025-01-01T00:01:00Z',first_raw_id:101,last_raw_id:102,preview:'FIRST_SNIPPET',longest_message:{id:102,role:'assistant',chars:2000}},
   resolved_event_ids:[],last_attempt:{role:'event_writer:0:0',error:'Synthetic error',output_chars:20}};
@@ -28,14 +28,14 @@ globalThis.fetch=async(url,options={})=>{
   else if(url.endsWith('/status')&&statusError)return {ok:false,json:async()=>({detail:statusError})};
   else if(url.endsWith('/status')&&staleStatus)result={pending_materials:[item,{...item,id:18,batch_id:'other'}]};
   else if(url.endsWith('/status'))result={pending_materials:[{...item,status:skipped?'resolved_skipped':'resolved',resolved_event_ids:skipped?[]:['event-synthetic']}]};
-  else if(url.endsWith('/recovery-preview')){if(previewWait)await previewWait;if(previewError)return {ok:false,json:async()=>({detail:previewError})};result={pending_id:17,batch_id:'synthetic',originals:2,original_chars:100,max_input_chars:5000,batches:2,oversized_batches:0,can_rebatch:true};}
+  else if(url.endsWith('/recovery-preview')){if(previewWait)await previewWait;if(previewError)return {ok:false,json:async()=>({detail:previewError})};result={pending_id:17,batch_id:'synthetic',originals:2,original_chars:100,max_input_chars:5000,batches:2,oversized_batches:0,can_rebatch:true,...(alreadyProcessed?{already_processed:2,skipped_originals:0}: {})};}
   else if(url.endsWith('/rebatch'))result={status:'rebatched'};
-  else if(url.endsWith('/skip-batch')){if(skipError)return {ok:false,json:async()=>({detail:skipError})};skipped=true;result={status:'skipped_batch',skipped_originals:2};}
+  else if(url.endsWith('/skip-batch')){if(skipError)return {ok:false,json:async()=>({detail:skipError})};skipped=true;result={status:'skipped_batch',skipped_originals:alreadyProcessed?0:2,...(alreadyProcessed?{already_processed:2}:{})};}
   else throw new Error('Unexpected request '+url);
   return {ok:true,json:async()=>structuredClone(result)};
 };
 const button=text=>[...document.querySelectorAll('button')].find(node=>node.textContent===text);
-async function render(status,attempts=[]){if(root)await act(async()=>root.unmount());requests.length=0;skipped=false;previewWait=previewError=skipError=statusError=null;staleStatus=false;await act(async()=>{root=mount({status,attempts,pending_materials:[item]});});}
+async function render(status,attempts=[]){if(root)await act(async()=>root.unmount());requests.length=0;skipped=false;previewWait=previewError=skipError=statusError=null;staleStatus=alreadyProcessed=false;await act(async()=>{root=mount({status,attempts,pending_materials:[item]});});}
 async function click(text){await act(async()=>{button(text).click();});}
 after(async()=>{if(root)await act(async()=>root.unmount());dom.window.close();stop();for(const c of channels){c.port1.close();c.port2.close();}globalThis.MessageChannel=NativeChannel;await rm(directory,{recursive:true,force:true});});
 test('pending summaries do not fetch originals until explicitly opened',async()=>{
@@ -145,4 +145,15 @@ test('an older status response cannot reopen the confirmed skip or hide another 
   assert.equal(document.querySelector('[aria-label="待办 17"]'),null);
   assert(document.querySelector('[aria-label="待办 18"]'));
   assert.match(document.body.textContent,/待办 17 · 已手动跳过，原话保留/);
+});
+
+test('already processed originals use a skip-only preview and the confirmed todo disappears',async()=>{
+  await render();
+  alreadyProcessed=true;
+  await click('跳过本批，保留原话');
+  assert.deepEqual(requests.find(r=>r.url.endsWith('/recovery-preview')).body,{batch_id:'synthetic',action:'skip'});
+  assert.match(document.querySelector('[aria-label="确认跳过这批材料"]').textContent,/2 条.*已处理/);
+  await click('确认仅跳过本批');
+  assert.equal(document.querySelector('.pending-material'),null);
+  assert.match(document.body.textContent,/已从待办.*移除/);
 });

@@ -383,6 +383,105 @@ def _recovery_scope(store, batch_id):
     return batch, data, routing, stable
 
 
+
+def _pending_skip_scope(store, batch_id):
+    """A retained todo can outlive some or all of its original settlement."""
+    from . import pipeline as p
+    row = store.conn.execute("""SELECT b.*,pm.scope AS pending_scope,pm.source_ids_json,pm.id AS pending_id
+        FROM pipeline_pending_materials pm JOIN pipeline_batches b ON b.id=pm.batch_id
+        WHERE pm.batch_id=? AND pm.status IN ('open','running')""", (batch_id,)).fetchone()
+    if row is None or row['status'] not in (*RECOVERABLE, 'done'):
+        return None
+    data = json.loads(row['input_json'])
+    routing = data.get('routing_messages', data.get('messages', []))
+    stable = data.get('messages', routing)
+    owned = {m['id'] for m in stable}
+    processed = {r[0] for r in store.conn.execute(
+        'SELECT raw_id FROM raw_processing WHERE raw_id IN (SELECT value FROM json_each(?))',
+        (encode(sorted(owned)),))}
+    if row['status'] != 'done' and not processed:
+        return None  # ordinary failed-batch recovery retains all existing guards
+    ids = json.loads(row['source_ids_json'])
+    selected = set(ids)
+    frozen = {m['id']: m for m in routing}
+    if (not selected or len(ids) != len(selected) or len(owned) != len(stable)
+            or len(frozen) != len(routing) or not selected.issubset(owned & frozen.keys())
+            or row['scope'] != row['pending_scope'] or row['scope'] != data.get('scope')
+            or not _same_scope(data, routing)):
+        raise Conflict('无法确认待办原话范围，请先检查批次记录')
+    remaining = selected - processed
+    if row['status'] != 'done' and not (owned - processed).issubset(selected):
+        raise Conflict('待办未覆盖本批全部未处理原话，不能关闭整个批次')
+    if remaining:
+        if 'messages' not in data:
+            raise Conflict('旧批缺少未处理原话的冻结归属范围')
+        if row['status'] != 'done' and not store.conn.execute(
+                'SELECT 1 FROM pipeline_batches b WHERE b.id=? AND '+p.SCOPE_HEAD, (batch_id,)).fetchone():
+            raise Conflict('请先处理同一聊天中更早的批次')
+        for unit in p.dialogue_units(routing):
+            unit_ids = {m['id'] for m in unit}
+            if unit_ids & remaining and (not unit_ids.issubset(remaining) or not p.dialogue_unit_is_complete(unit)):
+                raise Conflict('本批未处理范围不包含完整问答，不能跳过')
+        if store.conn.execute("""SELECT 1 FROM pipeline_pending_materials pm,json_each(pm.source_ids_json) s
+                WHERE pm.status IN ('open','running') AND pm.batch_id<>?
+                AND s.value IN (SELECT value FROM json_each(?)) LIMIT 1""",
+                (batch_id, encode(sorted(remaining)))).fetchone():
+            raise Conflict('未处理原话由其他待办保留，请先处理对应待办')
+    messages = [m for m in routing if m['id'] in selected]
+    for message in messages:
+        raw = store.conn.execute('SELECT * FROM raw_events WHERE id=?', (message['id'],)).fetchone()
+        if raw is None or _message_key(p.message(raw)) != _message_key(message):
+            raise Conflict('原话已变化，请刷新并核对批次')
+    return row, messages, remaining
+
+
+def _close_pending_skip(store, scope):
+    row, messages, remaining = scope
+    # Never replace existing settlement receipts or retire an already completed
+    # routing producer. For unfinished plans, release their unprocessed routing
+    # cache just as ordinary skip/rebuild does, including a parked question tail.
+    discarded = []
+    if row['status'] != 'done':
+        for message in json.loads(row['input_json']).get('routing_messages', []):
+            raw_id = message['id']
+            processing = store.conn.execute('SELECT operation_id FROM raw_processing WHERE raw_id=?', (raw_id,)).fetchone()
+            provenance = store.conn.execute('SELECT * FROM pipeline_route_provenance WHERE raw_id=?', (raw_id,)).fetchone()
+            if provenance is not None and provenance['batch_id'] != row['id']:
+                continue
+            if processing:
+                # A route reused by a genuine completed settlement is still
+                # authoritative, even if it was first produced by this plan.
+                settled_batch = store.conn.execute(
+                    "SELECT 1 FROM pipeline_batches WHERE id=? AND status='done'",
+                    (processing['operation_id'],)).fetchone()
+                settlement = (store.conn.execute(
+                    'SELECT 1 FROM fact_event_settlement_operations WHERE operation_id=?',
+                    (processing['operation_id'],)).fetchone() if store.conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='fact_event_settlement_operations'").fetchone() else None)
+                if not remaining or processing['operation_id'] == row['id'] or provenance is None or settled_batch or settlement:
+                    continue  # only retire this unfinished plan's stale cache
+            route = store.conn.execute('SELECT route_json FROM pipeline_routes WHERE raw_id=?', (raw_id,)).fetchone()
+            if route or provenance:
+                discarded.append({'raw_id': raw_id, 'route_json': route[0] if route else None,
+                                  'provenance': dict(provenance) if provenance else None})
+            store.conn.execute('DELETE FROM pipeline_routes WHERE raw_id=?', (raw_id,))
+            store.conn.execute('DELETE FROM pipeline_route_provenance WHERE raw_id=?', (raw_id,))
+    for raw_id in sorted(remaining):
+        store.conn.execute('INSERT INTO raw_processing VALUES (?,?,?)',
+                           (raw_id, 'manual_skip:'+row['id'], 'manual_skip'))
+    result = {'status': 'skipped_batch', 'batch_id': row['id'],
+              'skipped_originals': len(remaining), 'already_processed': len(messages)-len(remaining)}
+    if row['status'] != 'done':
+        previous = json.loads(row['result_json'] or '{}')
+        audit = {**previous, 'status': 'processed', 'batch_id': row['id'], 'pending': 0,
+                 'completed_at': now(), 'manual_skip': True, 'manual_skip_receipt': result,
+                 'discarded_route_cache': discarded}
+        store.conn.execute("UPDATE pipeline_batches SET status='done',result_json=? WHERE id=?",
+                           (encode(audit), row['id']))
+    store.conn.execute("UPDATE pipeline_pending_materials SET status='resolved_skipped',updated_at=? WHERE id=?",
+                       (now(), row['pending_id']))
+    return result
+
 def _recovery_chunks(data, max_chars):
     from . import pipeline as p
     from .pipeline_limits import routing_blocks
@@ -400,8 +499,25 @@ def _recovery_chunks(data, max_chars):
     return result
 
 
-def recovery_preview(database, batch_id, max_input_chars=None):
+def recovery_preview(database, batch_id, max_input_chars=None, *, action=None):
+    if action not in (None, 'skip'):
+        raise ValueError('未知的预览操作')
+    if not isinstance(batch_id, str) or not batch_id:
+        raise ValueError('请选择需要处理的批次')
     with Store(database, read_only=True) as store, store.transaction():
+        if action == 'skip':
+            scope = _pending_skip_scope(store, batch_id)
+            if scope is not None:
+                batch, messages, remaining = scope
+                count = len(remaining)
+            else:
+                batch, _, _, messages = _recovery_scope(store, batch_id)
+                count = len(messages)
+            return {'batch_id': batch_id, 'scope': batch['scope'], 'originals': len(messages),
+                    'original_chars': sum(len(m['content']) for m in messages),
+                    'already_processed': len(messages)-count, 'skipped_originals': count,
+                    'first_at': min(m['created_at'] for m in messages), 'last_at': max(m['created_at'] for m in messages),
+                    'can_rebatch': False}
         batch, data, routing, stable = _recovery_scope(store, batch_id)
         chars = sum(len(m['content']) for m in stable)
         if max_input_chars is None:
@@ -434,6 +550,10 @@ def _rebuild(database, batch_id, *, recovery_action=None, max_input_chars=None, 
     with Store(database) as store, store.transaction(immediate=True):
         batch = store.conn.execute('SELECT rowid AS queue_order,* FROM pipeline_batches WHERE id=?',
                                    (batch_id,)).fetchone()
+        if recovery_action == 'skip':
+            scope = _pending_skip_scope(store, batch_id)
+            if scope is not None:
+                return _close_pending_skip(store, scope)
         if recovery_action:
             batch, data, _, _ = _recovery_scope(store, batch_id)
         elif batch is None or batch['status'] != 'needs_repair':

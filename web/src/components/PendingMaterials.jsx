@@ -109,7 +109,7 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
     if(skip){setPreview(null);setSkipFeedback({id:item.id,message:'正在读取跳过预览…'});}
     else setSkipFeedback(null);
     try{
-      setPreview({...await call('recovery-preview',{batch_id:item.batch_id,...(skip?{}:{max_input_chars:Number(limit)})}),pending_id:item.id,action});
+      setPreview({...await call('recovery-preview',{batch_id:item.batch_id,...(skip?{action:'skip'}:{max_input_chars:Number(limit)})}),pending_id:item.id,action});
       setSkipFeedback(null);
     }catch(e){
       if(skip)setSkipFeedback({id:item.id,message:'无法读取跳过预览：'+e.message});
@@ -125,7 +125,9 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
         confirm:skip?'SKIP_PIPELINE_BATCH':'REBATCH_PIPELINE_BATCH',...(!skip?{max_input_chars:preview.max_input_chars}:{})});
       if(result.status!==(skip?'skipped_batch':'rebatched'))throw new Error('整理正在运行，请稍后再试。');
       setPreview(null);
-      const message=skip?`已跳过这批 ${result.skipped_originals} 条原话的 Event 整理，原话保留。`:`已拆成 ${result.batches} 批，旧计划与模型结果保留。`;
+      const message=skip?(result.already_processed>0
+        ?`已从待办中移除本批：${result.already_processed} 条原话已有处理记录，另跳过 ${result.skipped_originals} 条；原话和已有 Event 保留。`
+        :`已跳过这批 ${result.skipped_originals} 条原话的 Event 整理，原话保留。`):`已拆成 ${result.batches} 批，旧计划与模型结果保留。`;
       if(skip){
         confirmedSkips.current.add(preview.batch_id);
         setSkipFeedback(null);
@@ -178,7 +180,7 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
       {(running||item.status==='running')&&<p className="pending-material__meta" role="status">后台正在整理，暂不能跳过或恢复批次；请等当前整理结束。</p>}
       {skipFeedback?.id===item.id&&<p role="status">{skipFeedback.message}</p>}
       {preview?.pending_id===item.id&&<div className="pending-recovery" role="region" ref={preview.action==='skip'?skipConfirmation:undefined} tabIndex={preview.action==='skip'?-1:undefined} aria-label={preview.action==='skip'?'确认跳过这批材料':'拆分预览'}>
-        {preview.action==='skip'?<><h5>仅跳过这批材料的 Event 整理？</h5><p>共 {preview.originals} 条原话、{preview.original_chars?.toLocaleString()} 字符，将标记为手动跳过。原话和已有 Event 保留；这批原话不会再自动生成 Event。</p></>:<>
+        {preview.action==='skip'?<><h5>仅跳过这批材料的 Event 整理？</h5><p>共 {preview.originals} 条原话、{preview.original_chars?.toLocaleString()} 字符。{preview.already_processed>0?`其中 ${preview.already_processed} 条已处理，保留已有结算；仅剩余 ${preview.skipped_originals} 条标记为手动跳过。`:'将标记为手动跳过。'}原话和已有 Event 保留；这批原话不会再自动生成 Event。</p></>:<>
           <label className="settings-field"><span>每批原话字符上限</span><input type="number" min="2000" max="100000" value={limit} onChange={event=>setLimit(event.target.value)}/></label>
           <button type="button" disabled={busy||running} onClick={()=>previewRecovery(item)}>更新拆分预览</button><p>保留完整问答，拆成 {preview.batches} 批；其中 {preview.oversized_batches} 批仍超出目标。</p>
           {preview.batch_chars&&<p>各批原话字符数：{preview.batch_chars.map(value=>value.toLocaleString()).join('、')}。</p>}

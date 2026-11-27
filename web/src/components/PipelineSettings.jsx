@@ -21,7 +21,7 @@ export function PipelineSettings({onOpenSummary,active=true}) {
   const [limits,setLimits]=useState(null);
   const mounted=useRef(true),polling=useRef(false),rebuildDialog=useRef(null),restoreDialog=useRef(null);
   const [rebuildTarget,setRebuildTarget]=useState('');
-  const recoveryDialog=useRef(null);
+  const recoveryDialog=useRef(null),confirmedSkips=useRef(new Set());
   const [recovery,setRecovery]=useState(null),[recoveryLimit,setRecoveryLimit]=useState('');
   const running=['queued','running'].includes(work?.status);
   const holds=work?.blocked_scopes||[];
@@ -52,7 +52,8 @@ export function PipelineSettings({onOpenSummary,active=true}) {
     if(!response.ok)throw new Error(result.detail || '整理暂未完成，原话会保留，请稍后重试。');
     return result;
   }
-  function accept(result){setWork(result);setTask(result.status==='awaiting_agent'?result.result:null);}
+  function closedItems(items){return items?.map(item=>confirmedSkips.current.has(item.batch_id)&&['open','running'].includes(item.status)?{...item,status:'resolved_skipped',can_skip:false}:item);}
+  function accept(result){setWork({...result,pending_materials:closedItems(result.pending_materials)});setTask(result.status==='awaiting_agent'?result.result:null);}
   async function showProgress() {
     setProgressBusy(true);
     try {setProgressReport(await call('progress'));setStatus('');}
@@ -134,14 +135,16 @@ export function PipelineSettings({onOpenSummary,active=true}) {
   async function beginRecovery(action,batchId) {
     if(busy||running)return;
     setBusy(true);setStatus('');
+    const skip=action==='skip';
+    if(skip){setRecovery({action,batchId,preview:null});recoveryDialog.current.showModal();}
     try {
-      const preview=await call('recovery-preview',{batch_id:batchId});
-      setRecovery({action,preview});setRecoveryLimit(String(preview.max_input_chars));
-      recoveryDialog.current.showModal();
+      const preview=await call('recovery-preview',{batch_id:batchId,...(skip?{action:'skip'}:{})});
+      setRecovery({action,preview});setRecoveryLimit(String(preview.max_input_chars??''));
+      if(!skip)recoveryDialog.current.showModal();
     }catch(error){setStatus(error.message);}finally{setBusy(false);}
   }
   async function previewRecovery() {
-    if(busy||!recovery)return;
+    if(busy||!recovery?.preview)return;
     setBusy(true);
     try {
       const preview=await call('recovery-preview',{batch_id:recovery.preview.batch_id,max_input_chars:Number(recoveryLimit)});
@@ -149,7 +152,7 @@ export function PipelineSettings({onOpenSummary,active=true}) {
     }catch(error){setStatus(error.message);}finally{setBusy(false);}
   }
   async function confirmRecovery() {
-    if(busy||!recovery)return;
+    if(busy||running||!recovery?.preview)return;
     setBusy(true);
     try {
       const skip=recovery.action==='skip';
@@ -157,8 +160,21 @@ export function PipelineSettings({onOpenSummary,active=true}) {
         confirm:skip?'SKIP_PIPELINE_BATCH':'REBATCH_PIPELINE_BATCH',...(!skip?{max_input_chars:recovery.preview.max_input_chars}:{})});
       if(result.status!==(skip?'skipped_batch':'rebatched'))throw new Error('整理任务正在运行，请稍后刷新再操作。');
       recoveryDialog.current.close();setRecovery(null);setTask(null);setOutput('');
-      const message=skip?`已跳过本批 ${result.skipped_originals} 条原话的 Event 整理，原文保留。`:`已拆成 ${result.batches} 批，旧计划与模型结果保留。`;
+      const message=skip?(result.already_processed>0
+        ?`已从待办中移除本批：${result.already_processed} 条原话已有处理记录，另跳过 ${result.skipped_originals} 条；原话和已有 Event 保留。`
+        :`已跳过本批 ${result.skipped_originals} 条原话的 Event 整理，原文保留。`):`已拆成 ${result.batches} 批，旧计划与模型结果保留。`;
       setStatus(message);
+      if(skip){
+        confirmedSkips.current.add(recovery.preview.batch_id);
+        setWork(current=>({...current,pending_materials:closedItems(current?.pending_materials)}));
+        try{accept(await call('status'));}catch(error){setStatus(message+' 待办状态暂未刷新：'+error.message);}
+        try{
+          const queued=await call('next',{include_recent:true});
+          setWork(current=>({...queued,pending_materials:closedItems(queued.pending_materials??current?.pending_materials)}));
+          setStatus(message+'后台继续整理。');
+        }catch(error){setStatus(message+'后续任务未启动：'+error.message);}
+        return;
+      }
       try {accept(await call('next',{include_recent:true}));setStatus(message+'后台继续整理。');}
       catch(error){accept(await call('status'));setStatus(message+'后续任务未启动：'+error.message);}
     }catch(error){setStatus(error.message);}finally{setBusy(false);}
@@ -226,13 +242,14 @@ export function PipelineSettings({onOpenSummary,active=true}) {
         <button type="button" disabled={busy||!rebuildTarget} onClick={confirmRebuild}>确认作废旧计划并重新归线</button></div>
       <p role="status">{status}</p>
     </dialog>
-    <dialog ref={recoveryDialog} className="agent-guide" aria-labelledby="pipeline-recovery-title" onCancel={()=>setRecovery(null)}>
+    <dialog ref={recoveryDialog} className="agent-guide" aria-labelledby="pipeline-recovery-title" onCancel={event=>{if(busy)event.preventDefault();else setRecovery(null);}}>
       {recovery&&<><h3 id="pipeline-recovery-title">{recovery.action==='skip'?'跳过这批 Event 整理？':'按更小材料重新整理'}</h3>
-        <p>批次：<code>{recovery.preview.batch_id}</code></p>
-        <p>范围：{recovery.preview.originals} 条未整理原话，共 {recovery.preview.original_chars} 字符。<br/>
+        <p>批次：<code>{recovery.preview?.batch_id??recovery.batchId}</code></p>
+        {!recovery.preview?<>{busy&&<p role="status">正在读取跳过预览…</p>}</>:<>
+        <p>范围：{recovery.preview.originals} 条{recovery.preview.already_processed>0?'':'未整理'}原话，共 {recovery.preview.original_chars} 字符。<br/>
           {new Date(recovery.preview.first_at).toLocaleString()} — {new Date(recovery.preview.last_at).toLocaleString()}</p>
         <p>原文、旧任务记录和已保存的 Event 保留。只处理上述范围，后续新聊天仍会继续整理。</p>
-        {recovery.action==='skip'?<p>确认后，这批原话不再自动生成 Event。尚未完成的对话尾巴不在跳过范围内。</p>:<>
+        {recovery.action==='skip'?<p>{recovery.preview.already_processed>0&&`其中 ${recovery.preview.already_processed} 条已处理，保留已有结算；仅剩余 ${recovery.preview.skipped_originals} 条标记为手动跳过。`}确认后，这批原话不再自动生成 Event。尚未完成的对话尾巴不在跳过范围内。</p>:<>
           <label className="settings-field"><span>本批每次最多读取的原话字符</span><input type="number" min="2000" max="100000" value={recoveryLimit} onChange={event=>setRecoveryLimit(event.target.value)}/></label>
           <button type="button" disabled={busy} onClick={previewRecovery}>查看拆分结果</button>
           {Number(recoveryLimit)!==recovery.preview.max_input_chars?<p>上限已修改，请重新查看拆分结果。</p>:<>
@@ -242,8 +259,10 @@ export function PipelineSettings({onOpenSummary,active=true}) {
           </>}
           <p>新计划使用当前设置，按顺序重新归线和写作，可能产生模型调用费用。</p>
         </>}
+        </>}
+        {running&&<p role="status">后台正在整理，请等当前整理结束后确认。</p>}
         <div className="settings-actions"><button type="button" disabled={busy} onClick={()=>{recoveryDialog.current.close();setRecovery(null);}}>取消</button>
-          <button type="button" disabled={busy||(recovery.action==='rebatch'&&(!recovery.preview.can_rebatch||Number(recoveryLimit)!==recovery.preview.max_input_chars))} onClick={confirmRecovery}>{recovery.action==='skip'?'确认跳过本批':'确认拆小并整理'}</button></div>
+          <button type="button" disabled={busy||running||!recovery.preview||(recovery.action==='rebatch'&&(!recovery.preview.can_rebatch||Number(recoveryLimit)!==recovery.preview.max_input_chars))} onClick={confirmRecovery}>{recovery.action==='skip'?'确认跳过本批':'确认拆小并整理'}</button></div>
         <p role="status">{status}</p></>}
     </dialog>
     <dialog ref={restoreDialog} className="agent-guide" aria-labelledby="pipeline-restore-title">
@@ -251,6 +270,6 @@ export function PipelineSettings({onOpenSummary,active=true}) {
       <p>将 {work?.auto_boundary_originals||0} 条原话重新放入待整理池，并启动一次后台整理。后续模型调用可能产生费用；已结算和主动跳过的原话不会重跑。</p>
       <div className="settings-actions"><button type="button" onClick={()=>restoreDialog.current.close()}>取消</button><button type="button" disabled={busy||running} onClick={restoreBoundary}>确认恢复并整理</button></div>
     </dialog>
-    <PendingMaterials work={work} onChange={accept}/>
-    <p role="status">{status}</p></section>;
+    <p role="status">{status}</p>
+    <PendingMaterials work={work} onChange={accept}/></section>;
 }

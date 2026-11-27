@@ -197,3 +197,73 @@ def test_daytime_router_failure_can_skip_or_start_smaller_event_batches(settings
         result = asyncio.run(recovery.recover_batch(settings.database, batch_id, action, 'REBATCH_PIPELINE_BATCH', 5000))
         assert result['batches'] == 6 and all(key.startswith('pipeline:') for key in result['batch_ids'])
         assert asyncio.run(p.advance(settings.database, include_recent=True, runner=short_runner))['processed_originals'] == 2
+
+
+def test_skip_a_completed_batch_with_retained_material(settings):
+    from test_pipeline_pending import retained
+    item = retained(settings)
+    client = TestClient(create_app(settings, token='synthetic', live=True), headers={'Authorization':'Bearer synthetic'})
+    before = {table: rows(settings, table) for table in ('raw_events','fact_events','pipeline_jobs','pipeline_attempts','pipeline_routes','pipeline_route_provenance')}
+    assert client.get('/v1/pipeline/status').json()['pending_materials'][0]['can_skip']
+    preview = client.post('/v1/pipeline/recovery-preview',json={'batch_id':item['batch_id'],'action':'skip'})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()['originals'] == 2 and preview.json()['already_processed'] == 0
+    result = client.post('/v1/pipeline/skip-batch',json={'batch_id':item['batch_id'],'confirm':'SKIP_PIPELINE_BATCH'})
+    assert result.status_code == 200, result.text
+    assert result.json()['skipped_originals'] == 2
+    assert client.get('/v1/pipeline/status').json()['pending_materials'][0]['status'] == 'resolved_skipped'
+    assert all(rows(settings, table) == previous for table,previous in before.items())
+    assert len(rows(settings,'raw_processing')) == 2
+    assert all(row[2]=='manual_skip' for row in rows(settings,'raw_processing'))
+    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=short_runner))['status']=='current'
+
+
+@pytest.mark.parametrize(('stale_status','pending_status'),[('done','open'),('needs_repair','open'),('needs_repair','running')])
+def test_skip_already_settled_pending_closes_only_the_stale_record(settings,stale_status,pending_status):
+    from test_pipeline_pending import retained
+    from serein.extensions import pipeline_pending as pending
+    item=retained(settings)
+    pending.resume(settings.database,item['id'])
+    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=synthetic_runner))['events']==1
+    with Store(settings.database) as store:
+        batch_id=store.conn.execute('SELECT batch_id FROM pipeline_pending_materials WHERE id=?',(item['id'],)).fetchone()[0]
+        store.conn.execute('UPDATE pipeline_pending_materials SET status=? WHERE id=?',(pending_status,item['id']))
+        store.conn.execute('UPDATE pipeline_batches SET status=? WHERE id=?',(stale_status,batch_id))
+    before={table:rows(settings,table) for table in ('raw_events','raw_processing','fact_events','pipeline_jobs','pipeline_attempts','pipeline_routes','pipeline_route_provenance','fact_event_settlement_operations')}
+    client=TestClient(create_app(settings,token='synthetic',live=True),headers={'Authorization':'Bearer synthetic'})
+    preview=client.post('/v1/pipeline/recovery-preview',json={'batch_id':batch_id,'action':'skip'})
+    assert preview.status_code==200,preview.text
+    assert preview.json()['already_processed']==2 and preview.json()['originals']==2
+    assert client.post('/v1/pipeline/skip-batch',json={'batch_id':batch_id}).status_code==400
+    result=client.post('/v1/pipeline/skip-batch',json={'batch_id':batch_id,'confirm':'SKIP_PIPELINE_BATCH'})
+    assert result.status_code==200,result.text
+    assert result.json()['skipped_originals']==0 and result.json()['already_processed']==2
+    assert client.get('/v1/pipeline/status').json()['pending_materials'][0]['status']=='resolved_skipped'
+    assert all(rows(settings,table)==previous for table,previous in before.items())
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(batch_id,)).fetchone()[0]=='done'
+    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=short_runner))['status']=='current'
+
+
+def test_skip_partially_settled_batch_preserves_receipts_and_skips_only_complete_remaining_units(settings):
+    batch_id=failed(settings,tail=True)
+    with Store(settings.database) as store:
+        store.conn.executemany("INSERT INTO raw_processing VALUES (?,'other','settled')",[(1,),(2,)])
+    originals=rows(settings,'raw_events');existing=rows(settings,'raw_processing')
+    with pytest.raises(Conflict):
+        recovery.recovery_preview(settings.database,batch_id,5000)
+    preview=recovery.recovery_preview(settings.database,batch_id,action='skip')
+    assert preview['already_processed']==2 and preview['originals']==8
+    result=asyncio.run(recovery.recover_batch(settings.database,batch_id,'skip','SKIP_PIPELINE_BATCH'))
+    assert result['already_processed']==2 and result['skipped_originals']==6
+    assert rows(settings,'raw_processing')[:2]==existing
+    assert len(rows(settings,'raw_processing'))==8
+    assert rows(settings,'raw_events')==originals
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute("SELECT status FROM pipeline_pending_materials WHERE batch_id=?",(batch_id,)).fetchone()[0]=='resolved_skipped'
+        assert store.conn.execute('SELECT 1 FROM raw_processing WHERE raw_id=9').fetchone() is None
+
+    raw_archive(settings).ingest([{'source_event_id':'failed-9','session_id':'failed','role':'assistant',
+        'text':'New answer after skipping','created_at':'2025-01-01T00:09:00Z','metadata':{'runtime':'failed'}}],source='synthetic')
+    later=asyncio.run(p.advance(settings.database,include_recent=True,runner=short_runner))
+    assert later['status']=='processed' and later['processed_originals']==2

@@ -20,18 +20,23 @@ dom.window.HTMLDialogElement.prototype.close=function(){this.removeAttribute('op
 const interval=globalThis.setInterval,clear=globalThis.clearInterval;
 const keepAlive=interval(()=>{},1000);
 globalThis.setInterval=()=>1;globalThis.clearInterval=()=>{};
-let state,root,recoveryBusy=false,unsplittable=false;
+let state,root,recoveryBusy=false,unsplittable=false,alreadyProcessed=false,previewError=null,previewWait=null;
 const requests=[];
 globalThis.fetch=async(url,options={})=>{
   requests.push({url,body:options.body?JSON.parse(options.body):null});
   let result=state;
   if(url.endsWith('/recovery-preview')){
+    if(previewWait)await previewWait;
+    if(previewError)return {ok:false,json:async()=>({detail:previewError})};
     const body=JSON.parse(options.body),limit=body.max_input_chars||5000;
     result={batch_id:body.batch_id,originals:8,original_chars:16000,first_at:'2025-01-01T00:00:00Z',last_at:'2025-01-01T00:07:00Z',
       max_input_chars:limit,batches:unsplittable?1:limit===8000?2:4,batch_chars:unsplittable?[16000]:[limit===8000?8000:4000],
-      can_rebatch:!unsplittable,oversized_batches:unsplittable?1:0};
+      can_rebatch:!unsplittable,oversized_batches:unsplittable?1:0,...(alreadyProcessed?{already_processed:8,skipped_originals:0}: {})};
   }
-  else if(url.endsWith('/skip-batch'))result=recoveryBusy?{status:'busy'}:{status:'skipped_batch',skipped_originals:8};
+  else if(url.endsWith('/skip-batch')){
+    result=recoveryBusy?{status:'busy'}:{status:'skipped_batch',skipped_originals:alreadyProcessed?0:8,...(alreadyProcessed?{already_processed:8}:{})};
+    if(!recoveryBusy&&alreadyProcessed)state={status:'completed',stage:'skipped_batch',pending_materials:(state.pending_materials||[]).map(item=>item.batch_id===JSON.parse(options.body).batch_id?{...item,status:'resolved_skipped'}:item)};
+  }
   else if(url.endsWith('/rebatch'))result={status:'rebatched',batches:2};
   else if(url.endsWith('/rebuild'))result={status:'rebuilt'};
   else if(url.endsWith('/retry-batch'))result={status:'resumed'};
@@ -54,7 +59,7 @@ const button=text=>[...document.querySelectorAll('button')].find(node=>node.text
 async function render(value){
   if(root)await act(async()=>{root.unmount();root=null;await wait();});
   state=value;requests.length=0;
-  recoveryBusy=false;unsplittable=false;
+  recoveryBusy=false;unsplittable=alreadyProcessed=false;previewError=previewWait=null;
   await act(async()=>{root=mount();await wait();});
 }
 async function click(node){assert(node,'button exists');assert(!node.disabled);await act(async()=>{node.click();await wait();});}
@@ -164,6 +169,33 @@ test('a busy recovery leaves confirmation open without starting another task',as
   assert(document.querySelector('#pipeline-recovery-title').closest('dialog').open);
   assert.match(document.body.textContent,/正在运行/);
   assert(!requests.some(item=>item.url.endsWith('/next')));
+});
+
+test('the upper skip button immediately opens its preview and shows a preview error there',async()=>{
+  await render(paused());
+  let release;previewWait=new Promise(resolve=>{release=resolve;});
+  previewError='Synthetic preview blocked';
+  await click(button('跳过本批，保留原话'));
+  try{
+    const dialog=document.querySelector('dialog[open]');
+    assert(dialog);
+    assert.match(dialog.textContent,/正在.*预览/);
+    assert(!button('确认跳过本批')||button('确认跳过本批').disabled);
+  }finally{await act(async()=>{release();await wait();});}
+  assert.match(document.querySelector('dialog[open]').textContent,/Synthetic preview blocked/);
+  assert(!requests.some(item=>item.url.endsWith('/skip-batch')));
+});
+
+test('the upper skip button closes an already processed todo using the skip-specific preview',async()=>{
+  await render({...paused(),pending_materials:[{id:17,batch_id:'paused-synthetic',status:'open',kind:'writing',reason:'Synthetic stale todo',originals:8,original_chars:16000,can_skip:true,resolved_event_ids:[]},{id:18,batch_id:'other-synthetic',status:'open',kind:'writing',reason:'Other pending',originals:2,original_chars:30,can_skip:true,resolved_event_ids:[]}]});
+  alreadyProcessed=true;
+  await click(button('跳过本批，保留原话'));
+  assert.deepEqual(requests.find(item=>item.url.endsWith('/recovery-preview')).body,{batch_id:'paused-synthetic',action:'skip'});
+  assert.match(document.querySelector('dialog[open]').textContent,/8 条.*已处理/);
+  await click(button('确认跳过本批'));
+  assert.equal(document.querySelector('[aria-label="待办 17"]'),null);
+  assert(document.querySelector('[aria-label="待办 18"]'));
+  assert.match(document.body.textContent,/已从待办.*移除/);
 });
 after(async()=>{
   if(root)await act(async()=>root.unmount());
