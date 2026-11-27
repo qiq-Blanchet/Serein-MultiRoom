@@ -122,7 +122,8 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
     if(skip)setSkipFeedback({id:preview.pending_id,message:'正在跳过本批，原话保留…'});
     try{
       const result=await call(skip?'skip-batch':'rebatch',{batch_id:preview.batch_id,
-        confirm:skip?'SKIP_PIPELINE_BATCH':'REBATCH_PIPELINE_BATCH',...(!skip?{max_input_chars:preview.max_input_chars}:{})});
+        confirm:skip?'SKIP_PIPELINE_BATCH':'REBATCH_PIPELINE_BATCH',
+        ...(skip?{skip_revision:preview.skip_revision}:{max_input_chars:preview.max_input_chars})});
       if(result.status!==(skip?'skipped_batch':'rebatched'))throw new Error('整理正在运行，请稍后再试。');
       setPreview(null);
       const message=skip?(result.already_processed>0

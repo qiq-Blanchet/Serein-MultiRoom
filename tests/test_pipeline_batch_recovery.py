@@ -208,7 +208,10 @@ def test_skip_a_completed_batch_with_retained_material(settings):
     preview = client.post('/v1/pipeline/recovery-preview',json={'batch_id':item['batch_id'],'action':'skip'})
     assert preview.status_code == 200, preview.text
     assert preview.json()['originals'] == 2 and preview.json()['already_processed'] == 0
-    result = client.post('/v1/pipeline/skip-batch',json={'batch_id':item['batch_id'],'confirm':'SKIP_PIPELINE_BATCH'})
+    assert client.post('/v1/pipeline/skip-batch',json={
+        'batch_id':item['batch_id'],'confirm':'SKIP_PIPELINE_BATCH'}).status_code==400
+    result = client.post('/v1/pipeline/skip-batch',json={
+        'batch_id':item['batch_id'],'confirm':'SKIP_PIPELINE_BATCH','skip_revision':preview.json()['skip_revision']})
     assert result.status_code == 200, result.text
     assert result.json()['skipped_originals'] == 2
     assert client.get('/v1/pipeline/status').json()['pending_materials'][0]['status'] == 'resolved_skipped'
@@ -235,7 +238,8 @@ def test_skip_already_settled_pending_closes_only_the_stale_record(settings,stal
     assert preview.status_code==200,preview.text
     assert preview.json()['already_processed']==2 and preview.json()['originals']==2
     assert client.post('/v1/pipeline/skip-batch',json={'batch_id':batch_id}).status_code==400
-    result=client.post('/v1/pipeline/skip-batch',json={'batch_id':batch_id,'confirm':'SKIP_PIPELINE_BATCH'})
+    result=client.post('/v1/pipeline/skip-batch',json={
+        'batch_id':batch_id,'confirm':'SKIP_PIPELINE_BATCH','skip_revision':preview.json()['skip_revision']})
     assert result.status_code==200,result.text
     assert result.json()['skipped_originals']==0 and result.json()['already_processed']==2
     assert client.get('/v1/pipeline/status').json()['pending_materials'][0]['status']=='resolved_skipped'
@@ -254,7 +258,8 @@ def test_skip_partially_settled_batch_preserves_receipts_and_skips_only_complete
         recovery.recovery_preview(settings.database,batch_id,5000)
     preview=recovery.recovery_preview(settings.database,batch_id,action='skip')
     assert preview['already_processed']==2 and preview['originals']==8
-    result=asyncio.run(recovery.recover_batch(settings.database,batch_id,'skip','SKIP_PIPELINE_BATCH'))
+    result=asyncio.run(recovery.recover_batch(settings.database,batch_id,'skip','SKIP_PIPELINE_BATCH',
+                                              skip_revision=preview['skip_revision']))
     assert result['already_processed']==2 and result['skipped_originals']==6
     assert rows(settings,'raw_processing')[:2]==existing
     assert len(rows(settings,'raw_processing'))==8
@@ -267,3 +272,22 @@ def test_skip_partially_settled_batch_preserves_receipts_and_skips_only_complete
         'text':'New answer after skipping','created_at':'2025-01-01T00:09:00Z','metadata':{'runtime':'failed'}}],source='synthetic')
     later=asyncio.run(p.advance(settings.database,include_recent=True,runner=short_runner))
     assert later['status']=='processed' and later['processed_originals']==2
+
+
+def test_skip_rejects_pending_scope_expanded_after_preview(settings):
+    batch_id=failed(settings)
+    with Store(settings.database) as store:
+        store.conn.executemany("INSERT INTO raw_processing VALUES (?,'other','settled')",[(1,),(2,)])
+        store.conn.execute("UPDATE pipeline_batches SET status='done' WHERE id=?",(batch_id,))
+        store.conn.execute('UPDATE pipeline_pending_materials SET source_ids_json=? WHERE batch_id=?',
+                           (encode([1,2]),batch_id))
+    preview=recovery.recovery_preview(settings.database,batch_id,action='skip')
+    assert preview['already_processed']==2 and preview['skipped_originals']==0
+    with Store(settings.database) as store:
+        store.conn.execute('UPDATE pipeline_pending_materials SET source_ids_json=? WHERE batch_id=?',
+                           (encode(list(range(1,9))),batch_id))
+    before=rows(settings,'raw_processing')
+    with pytest.raises(Conflict,match='重新预览'):
+        asyncio.run(recovery.recover_batch(settings.database,batch_id,'skip','SKIP_PIPELINE_BATCH',
+                                           skip_revision=preview['skip_revision']))
+    assert rows(settings,'raw_processing')==before

@@ -435,6 +435,16 @@ def _pending_skip_scope(store, batch_id):
     return row, messages, remaining
 
 
+def _skip_revision(batch, messages, remaining, pending_id=None):
+    """Bind an explicit confirmation to the exact scope that was previewed."""
+    return digest(encode({
+        'batch_id': batch['id'], 'batch_status': batch['status'],
+        'pending_id': pending_id, 'scope': batch['scope'],
+        'messages': [_message_key(message) for message in messages],
+        'remaining_source_ids': sorted(remaining),
+    }))
+
+
 def _close_pending_skip(store, scope):
     row, messages, remaining = scope
     # Never replace existing settlement receipts or retire an already completed
@@ -510,14 +520,16 @@ def recovery_preview(database, batch_id, max_input_chars=None, *, action=None):
             if scope is not None:
                 batch, messages, remaining = scope
                 count = len(remaining)
+                revision = _skip_revision(batch, messages, remaining, batch['pending_id'])
             else:
                 batch, _, _, messages = _recovery_scope(store, batch_id)
                 count = len(messages)
+                revision = _skip_revision(batch, messages, {m['id'] for m in messages})
             return {'batch_id': batch_id, 'scope': batch['scope'], 'originals': len(messages),
                     'original_chars': sum(len(m['content']) for m in messages),
                     'already_processed': len(messages)-count, 'skipped_originals': count,
                     'first_at': min(m['created_at'] for m in messages), 'last_at': max(m['created_at'] for m in messages),
-                    'can_rebatch': False}
+                    'can_rebatch': False, 'skip_revision': revision}
         batch, data, routing, stable = _recovery_scope(store, batch_id)
         chars = sum(len(m['content']) for m in stable)
         if max_input_chars is None:
@@ -532,7 +544,7 @@ def recovery_preview(database, batch_id, max_input_chars=None, *, action=None):
                 'oversized_batches': sum(size > max_input_chars for size in sizes), 'can_rebatch': len(chunks) > 1}
 
 
-async def recover_batch(database, batch_id, action, confirm, max_input_chars=None):
+async def recover_batch(database, batch_id, action, confirm, max_input_chars=None, *, skip_revision=None):
     from ..work_tasks import execute
     expected = {'skip': 'SKIP_PIPELINE_BATCH', 'rebatch': 'REBATCH_PIPELINE_BATCH'}
     if action not in expected or confirm != expected[action]:
@@ -540,11 +552,13 @@ async def recover_batch(database, batch_id, action, confirm, max_input_chars=Non
     if action == 'rebatch' and (type(max_input_chars) is not int or not 2000 <= max_input_chars <= 100000):
         raise ValueError('每批原话字符上限须为 2000 至 100000 的整数')
     async def operation():
-        return _rebuild(database, batch_id, recovery_action=action, max_input_chars=max_input_chars)
+        return _rebuild(database, batch_id, recovery_action=action, max_input_chars=max_input_chars,
+                        skip_revision=skip_revision)
     return await execute(database, 'pipeline', operation)
 
 
-def _rebuild(database, batch_id, *, recovery_action=None, max_input_chars=None, resume_pending_id=None):
+def _rebuild(database, batch_id, *, recovery_action=None, max_input_chars=None, resume_pending_id=None,
+             skip_revision=None):
     from . import pipeline as p
     p.initialize(database)
     with Store(database) as store, store.transaction(immediate=True):
@@ -553,9 +567,15 @@ def _rebuild(database, batch_id, *, recovery_action=None, max_input_chars=None, 
         if recovery_action == 'skip':
             scope = _pending_skip_scope(store, batch_id)
             if scope is not None:
+                current_revision = _skip_revision(scope[0], scope[1], scope[2], scope[0]['pending_id'])
+                if not isinstance(skip_revision, str) or skip_revision != current_revision:
+                    raise Conflict('待办范围或处理状态已变化，请重新预览后确认')
                 return _close_pending_skip(store, scope)
         if recovery_action:
-            batch, data, _, _ = _recovery_scope(store, batch_id)
+            batch, data, _, stable_scope = _recovery_scope(store, batch_id)
+            if (recovery_action == 'skip' and skip_revision is not None
+                    and skip_revision != _skip_revision(batch, stable_scope, {m['id'] for m in stable_scope})):
+                raise Conflict('待办范围或处理状态已变化，请重新预览后确认')
         elif batch is None or batch['status'] != 'needs_repair':
             raise Conflict('此批已不处于待修复状态，请刷新后确认')
         if resume_pending_id is not None and not store.conn.execute(

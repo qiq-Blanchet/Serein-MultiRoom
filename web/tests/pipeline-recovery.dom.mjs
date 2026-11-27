@@ -29,7 +29,7 @@ globalThis.fetch=async(url,options={})=>{
     if(previewWait)await previewWait;
     if(previewError)return {ok:false,json:async()=>({detail:previewError})};
     const body=JSON.parse(options.body),limit=body.max_input_chars||5000;
-    result={batch_id:body.batch_id,originals:8,original_chars:16000,first_at:'2025-01-01T00:00:00Z',last_at:'2025-01-01T00:07:00Z',
+    result={batch_id:body.batch_id,originals:8,original_chars:16000,first_at:'2025-01-01T00:00:00Z',last_at:'2025-01-01T00:07:00Z',skip_revision:'synthetic-revision',
       max_input_chars:limit,batches:unsplittable?1:limit===8000?2:4,batch_chars:unsplittable?[16000]:[limit===8000?8000:4000],
       can_rebatch:!unsplittable,oversized_batches:unsplittable?1:0,...(alreadyProcessed?{already_processed:8,skipped_originals:0}: {})};
   }
@@ -134,7 +134,7 @@ test('skipping previews the exact scope, cancellation is harmless, and confirmat
   assert(!requests.some(item=>item.url.endsWith('/skip-batch')));
   await click(button('跳过本批，保留原话'));
   await click(button('确认跳过本批'));
-  assert.deepEqual(requests.find(item=>item.url.endsWith('/skip-batch')).body,{batch_id:'paused-synthetic',confirm:'SKIP_PIPELINE_BATCH'});
+  assert.deepEqual(requests.find(item=>item.url.endsWith('/skip-batch')).body,{batch_id:'paused-synthetic',confirm:'SKIP_PIPELINE_BATCH',skip_revision:'synthetic-revision'});
   assert(requests.some(item=>item.url.endsWith('/next')));
   assert.match(document.body.textContent,/已跳过本批 8 条原话/);
 });

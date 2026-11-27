@@ -185,7 +185,8 @@ def routes(settings,auth):
     @router.post('/v1/pipeline/skip-batch')
     async def pipeline_skip_batch(body:dict):
         from ..extensions.pipeline_recovery import recover_batch
-        return await recover_batch(settings.database,body.get('batch_id'),'skip',body.get('confirm'))
+        return await recover_batch(settings.database,body.get('batch_id'),'skip',body.get('confirm'),
+                                   skip_revision=body.get('skip_revision'))
 
     @router.post('/v1/pipeline/rebatch')
     async def pipeline_rebatch(body:dict):

@@ -157,7 +157,8 @@ export function PipelineSettings({onOpenSummary,active=true}) {
     try {
       const skip=recovery.action==='skip';
       const result=await call(skip?'skip-batch':'rebatch',{batch_id:recovery.preview.batch_id,
-        confirm:skip?'SKIP_PIPELINE_BATCH':'REBATCH_PIPELINE_BATCH',...(!skip?{max_input_chars:recovery.preview.max_input_chars}:{})});
+        confirm:skip?'SKIP_PIPELINE_BATCH':'REBATCH_PIPELINE_BATCH',
+        ...(skip?{skip_revision:recovery.preview.skip_revision}:{max_input_chars:recovery.preview.max_input_chars})});
       if(result.status!==(skip?'skipped_batch':'rebatched'))throw new Error('整理任务正在运行，请稍后刷新再操作。');
       recoveryDialog.current.close();setRecovery(null);setTask(null);setOutput('');
       const message=skip?(result.already_processed>0

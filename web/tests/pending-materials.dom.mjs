@@ -28,7 +28,7 @@ globalThis.fetch=async(url,options={})=>{
   else if(url.endsWith('/status')&&statusError)return {ok:false,json:async()=>({detail:statusError})};
   else if(url.endsWith('/status')&&staleStatus)result={pending_materials:[item,{...item,id:18,batch_id:'other'}]};
   else if(url.endsWith('/status'))result={pending_materials:[{...item,status:skipped?'resolved_skipped':'resolved',resolved_event_ids:skipped?[]:['event-synthetic']}]};
-  else if(url.endsWith('/recovery-preview')){if(previewWait)await previewWait;if(previewError)return {ok:false,json:async()=>({detail:previewError})};result={pending_id:17,batch_id:'synthetic',originals:2,original_chars:100,max_input_chars:5000,batches:2,oversized_batches:0,can_rebatch:true,...(alreadyProcessed?{already_processed:2,skipped_originals:0}: {})};}
+  else if(url.endsWith('/recovery-preview')){if(previewWait)await previewWait;if(previewError)return {ok:false,json:async()=>({detail:previewError})};result={pending_id:17,batch_id:'synthetic',originals:2,original_chars:100,max_input_chars:5000,batches:2,oversized_batches:0,can_rebatch:true,skip_revision:'synthetic-revision',...(alreadyProcessed?{already_processed:2,skipped_originals:0}: {})};}
   else if(url.endsWith('/rebatch'))result={status:'rebatched'};
   else if(url.endsWith('/skip-batch')){if(skipError)return {ok:false,json:async()=>({detail:skipError})};skipped=true;result={status:'skipped_batch',skipped_originals:alreadyProcessed?0:2,...(alreadyProcessed?{already_processed:2}:{})};}
   else throw new Error('Unexpected request '+url);
@@ -87,7 +87,7 @@ test('skipping is limited to the selected batch and requires a preview plus conf
   assert(!requests.some(r=>r.url.endsWith('/skip-batch')));
   await click('取消');assert(!requests.some(r=>r.url.endsWith('/skip-batch')));
   await click('跳过本批，保留原话');await click('确认仅跳过本批');
-  assert.deepEqual(requests.find(r=>r.url.endsWith('/skip-batch')).body,{batch_id:'synthetic',confirm:'SKIP_PIPELINE_BATCH'});
+  assert.deepEqual(requests.find(r=>r.url.endsWith('/skip-batch')).body,{batch_id:'synthetic',confirm:'SKIP_PIPELINE_BATCH',skip_revision:'synthetic-revision'});
   assert.match(document.body.textContent,/已手动跳过，原话保留/);
 });
 
