@@ -627,6 +627,7 @@
   "web/tests/narrative-flow.test.mjs",
   "docs/cache-repair-codex-handoff.md",
   "docs/cache-repair-followup-codex-handoff.md",
+  "docs/writer-json-fence-fix-codex-handoff.md",
   "tests/test_cache_repair_followup.py",
   "tests/test_anthropic_cache_layout.py",
   "tests/test_anthropic_thinking_compat.py",
